@@ -1,0 +1,54 @@
+#!/bin/bash
+
+# Takes a firewall configuration file that was created by vpn-generate-firewall
+# and generates the commands to delete the VPN from our firewalls.
+#
+# It handles Fortigate or Juniper commands.
+#
+# Parameters:
+#   Filename that contains the commands to create a VPN.
+#
+# Duplicate delete commands are removed.  The remaining delete commands are
+# issued in reverse order from the create.
+#
+# Shared entries like aws-vpn are not deleted.
+#
+# Fortigate system interfaces are automatically deleted as a side effect of
+# deleting the VPN.
+
+set -e
+set -o pipefail
+
+file="${1:?"Missing filename"}"
+
+awk '
+	{ resource = ""; order=FNR }
+	/^config/ { config=$0 }
+	/^[ \t\f\n\r\v]*edit/ {
+		if (config !~ /system interface/) { resource=$2 }
+	}
+	/^[ \t\f\n\r\v]*set security/ {
+		if (/security-zone/) {
+			resource=$2 " " $3 " " $4 " " $5 " " $6 " " $7
+		} else {
+			resource=$2 " " $3 " " $4 " " $5
+		}
+		if (resource ~ /aws-vpn$/) { resource="" }
+	}
+	/^[ \t\f\n\r\v]*set interfaces/ { resource=$2 " " $3 }
+	/^[ \t\f\n\r\v]*set routing-options/ { resource=$2 " " $3 " " $4 " " $5 }
+	{
+		if (resource) {
+			if (config) {
+				# Fortigate
+				printf("%d\t%s;delete %s;end\n", order, config, resource);
+			} else {
+				printf("%d\tdelete %s\n", order, resource);
+			}
+		}
+	}
+' < $file |
+	sort -t$'\t' -k2,2 -u |
+	sort -k1,1nr |
+	sed -e 's/.*\t//' |
+	tr ';' '\n'

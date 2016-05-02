@@ -1,0 +1,331 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  "Description" : "Define a puppetmaster instance",
+  "Parameters" : {
+    "KeyPairName" : {
+      "Description" : "Name of an existing EC2 KeyPair (find or create here: https://console.aws.amazon.com/ec2/v2/home#KeyPairs: )",
+      "Type" : "String",
+      "MinLength": "1",
+      "MaxLength": "64",
+      "Default" : "whispir_common",
+      "AllowedPattern" : "[-_ a-zA-Z0-9]*",
+      "ConstraintDescription" : "can contain only alphanumeric characters, spaces, dashes and underscores."
+    }
+  },
+  "Resources" : {
+    "PuppetMasterIngress" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "Puppet master ingress",
+        "VpcId" : "vpc-5cd7b939",
+        "Tags" : [
+          { "Key" : "Name", "Value" : "PuppetMasterIngress" }
+        ]
+      }
+    },
+    "ipingresstcpPuppetMasterIngress81400A240000108140" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "8140",
+        "ToPort" : "8140",
+        "CidrIp" : "10.36.0.0/16",
+        "GroupId" : { "Fn::GetAtt": [ "PuppetMasterIngress", "GroupId" ] }
+      }
+    },
+    "puppet" : {
+      "Type" : "AWS::EC2::Instance",
+      "CreationPolicy" : {
+        "ResourceSignal" : {
+          "Timeout" : "PT20M"
+        }
+      },
+      "Metadata" : {
+        "AWS::CloudFormation::Init" : {
+          "configSets" : {
+            "default"    : [ "base", "puppetrole", "puppetrepo", "puppetmaster", "puppetagent" ]
+          },
+          "base" : {
+            "files" : {
+              "/etc/cfn/cfn-hup.conf" : {
+                "content" : { "Fn::Join" : ["", [
+                  "[main]", "\n",
+                  "stack=", { "Ref" : "AWS::StackId" }, "\n",
+                  "region=", { "Ref" : "AWS::Region" }, "\n",
+                  "interval=1"
+                  ]]
+                }
+              },
+              "/etc/cfn/hooks.d/cfn-auto-reloader.conf" : {
+                "content": { "Fn::Join" : ["", [
+                  "[cfn-auto-reloader-hook]\n",
+                  "triggers=post.update\n",
+                  "path=Resources.puppet.Metadata.AWS::CloudFormation::Init\n",
+                  "action=/opt/aws/bin/cfn-init -v -s ", { "Ref" : "AWS::StackId" },
+                                     " -r puppet",
+                                     " --region ", { "Ref" : "AWS::Region" },
+                                     "\n"
+                  ]]
+                }
+              },
+              "/etc/sysconfig/network-scripts/VPCData" : {
+                "content" : { "Fn::Join" : ["", [
+"VPCZones=\"A B\"\nVPCRegion=ap-southeast-1\nVPCNetworkBase=36\nVPCAccountName=whispir-sg1-dev\nVPCNameServer1=10.36.0.10\nVPCNameServer2=10.36.64.10\nVPCDomain=ap-southeast-1.sg1-dev.internal\n"
+                  ]]
+                },
+                "mode" : "000644"
+              },
+              "/etc/sysconfig/network" : {
+                "content" : { "Fn::Join" : ["", [
+"NETWORKING=yes\nHOSTNAME=puppet.ap-southeast-1.sg1-dev.internal\nNOZEROCONF=yes\nNETWORKING_IPV6=no\nIPV6INIT=no\nIPV6_ROUTER=no\nIPV6_AUTOCONF=no\nIPV6FORWARDING=no\nIPV6TO4INIT=no\nIPV6_CONTROL_RADVD=no\nSEARCH=ap-southeast-1.sg1-dev.internal\n"
+                  ]]
+                },
+                "mode" : "000644"
+              }
+            },
+            "commands" : {
+              "010" : {
+                "command" : "yum erase -y sendmail",
+                "ignoreErrors" : "true"
+              },
+              "020" : {
+                "command" : "sed -ne '/localdomain/d; s/^HOSTNAME=/hostname /p' /etc/sysconfig/network | sh"
+              },
+              "030" : {
+                "command" : "service boot_signal restart"
+              },
+              "040" : {
+                "command" : "service network restart",
+                "test" : "grep -q '^search\\s\\+\\S\\+\\s' /etc/resolv.conf"
+              },
+              "050" : {
+                "command" : "service rsyslog restart"
+              }
+            },
+            "services" : {
+              "sysvinit" : {
+                "cfn-hup" : {
+                  "enabled" : "true",
+                  "ensureRunning" : "true",
+                  "files" : [ "/etc/cfn/cfn-hup.conf", "/etc/cfn/hooks.d/cfn-auto-reloader.conf" ]
+                }
+              }
+            }
+          },
+          "puppetrole" : {
+            "files" : {
+              "/etc/facter/facts.d/puppetrole" : {
+                "content" : "#!/bin/bash\necho puppetrole=puppetmaster",
+                "mode" : "0755"
+              }
+            },
+            "commands" : {
+              "000" : {
+                "command" : "rm -f /etc/facter/facts.d/*.bak"
+              }
+            }
+          },
+          "puppetrepo" : {
+            "commands" : {
+              "100" : {
+                "command" : "yum-config-manager --enable epel"
+              }
+            }
+          },
+          "puppetmaster" : {
+            "packages" : {
+              "yum" : {
+                "puppet-server" : [],
+                "cronie" : [],
+                "git" : [],
+                "procmail" : []
+              }
+            },
+            "files" : {
+              "/etc/puppet/autosign.conf" : {
+                "content" : { "Fn::Join" : ["", [
+"# Auto sign every request.  This relies on the security groups only allowing\n# access to the puppet master from trusted local hosts.\n\n# Do not use DNS names.  On the first boot of a server there is a short delay\n# before the local DNS is updated.\n\n*\n"
+                  ]]
+                },
+                "mode" : "000644"
+              },
+              "/etc/puppet/hiera.yaml" : {
+                "content" : { "Fn::Join" : ["", [
+"---\n:backends:\n  - yaml\n\n:logger: puppet\n\n:hierarchy:\n  - \"%{puppetrole}\"\n  - \"%{fqdn}\"\n  - \"%{domain}\"\n  - \"%{calling_module}\"\n  - \"%{name}\"\n  - \"%{operatingsystem}-%{operatingsystemmajrelease}\"\n  - \"common\"\n\n:yaml:\n  :datadir: \"/var/puppet/environments/%{environment}/hiera/\"\n\n:merge_behavior: deeper\n"
+                  ]]
+                },
+                "mode" : "000644"
+              },
+              "/etc/puppet/puppet.conf.CF" : {
+                "content" : { "Fn::Join" : ["", [
+"# WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING\n# WARNING                                                                 WARNING\n# WARNING                                                                 WARNING\n# WARNING   This file is duplicated in puppet/aws and in AWS-devops/CF.   WARNING\n# WARNING   Make sure that both sources generate identical contents.      WARNING\n# WARNING                                                                 WARNING\n# WARNING                                                                 WARNING\n# WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING\n\n[main]\n    # The Puppet log directory.\n    # The default value is '$vardir/log'.\n    logdir = /var/log/puppet\n\n    # Where Puppet PID files are kept.\n    # The default value is '$vardir/run'.\n    rundir = /var/run/puppet\n\n    # Where SSL certificates are kept.\n    # The default value is '$confdir/ssl'.\n    ssldir = $vardir/ssl\n\n    certname = <%= @uuid.downcase %>\n\n[agent]\n    # The file in which puppetd stores a list of the classes\n    # associated with the retrieved configuratiion.  Can be loaded in\n    # the separate ``puppet`` executable using the ``--loadclasses``\n    # option.\n    # The default value is '$confdir/classes.txt'.\n    classfile = $vardir/classes.txt\n\n    # Where puppetd caches the local configuration.  An\n    # extension indicating the cache format is added automatically.\n    # The default value is '$confdir/localconfig'.\n    localconfig = $vardir/localconfig\n\n    # The default environment is production.  Note that this indicates the\n    # production version of the Puppet manifests, do not confuse it with the\n    # application status in the current account.  In an application development\n    # account, you would normally run the production version of the puppet\n    # manifests.  The server role tells the puppet master the state of the\n    # applications on that server.\n\n    environment = production\n\n[master]\n    environmentpath = /var/puppet/environments\n    hiera_config = /etc/puppet/hiera.yaml\n    autosign = true\n    #TEMP\n    environment_timeout = 0\n    # storeconfigs = true\n    # storeconfigs_backend = puppetdb\n\n    parser = future\n"
+                  ]]
+                },
+                "mode" : "0644"
+              },
+              "/home/puppetmaster_puppet_aws/.ssh/id_rsa" : {
+                "content" : { "Fn::Join" : ["", [
+"-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAuZvICkqUztdr04VlLLE+k1htjVundWkIYCIItIOq9agUBMrL\nFDyjftTe7vsQ8e3wWYkU6+Rd+QKn0sux3Klu/elw4g3Zufpv/d2I7EF5bJXBr6uX\nkhIdnupH/+HssteVJwyjWmwaPkIzfsepS30uaCJOj70N3BQvfyuUMix47wRAXfic\nt6jlH/vQwyw3qM2dZdaYLtGFFEe1wlpQJ+5DrohGA4l9YpJBBYKXe5cY9tloSH/t\nOWQD6rgbCoCwPJIu7lYfT6fk7ML4LRSlEPit/YWWLSP2esjNrHFnDYwzmM4AbYEw\nHpdGUIHSFx4gn0dvUKBV8vGAYzhQ0pkUHeU04QIDAQABAoIBAQCwuKljWxWKR0PL\n9qOZRP1ej4Bnag/sU1/9IAqHzSG2mhzNX0SydPX6abYFdpjwsGr65PE9lIcA801V\nAErN3ajnKyAmq6dVUyTUYtzejYyOHZx3pXpAQu1fBJQfBz42HdtOfdL+4hSumJut\nJ2+Ch6Lq1VdVtlx+4d1DSPvmNb/DWflUqJRmn1DNNixizva2R0f57lVoRamfdixr\nNhdqPRFRjgu0dbV3APLGF7xb2pMsbodTGtJFrG4Pe1pJyiJHuTBcANagtm/7CuDw\nuo5B+1zHBSFTTZuv2xDsLHPzmHgOxg0nbnTeFNkMFUqbhVj9mBEcOBGAlbjBLmfn\nE6I1OKLtAoGBAO1G7XDni5V2LS3T0oh7tfOYFKdr2ZRrSNa4VBXa5vNOSYXv31lB\n3mKsl38fMdJNJXrGoCugd1qgHTUpoOodDCivr6ROQujtu9C1XRCAMi2xc2RtnrVD\n0IxFPrELNuN7lQyxhkooVxDX64A7VD1L4S9G/M0cA4Zoi8VzJ/Y+vDFzAoGBAMhB\nIgS45hzXhM6j7iTeBs32pKNa07sPC5TpSILoavTTy1BECXp02qOpxEtz4RwU6O4+\nQgyytOQoBKkdILGS2tAnpWQFL15MHvyF3oCFoEHnHSrdwdacLsF3ObvyBxXePQru\nxKPIx0d7W/LlT56LoTwgbZ1kHMtXRQr9yOZE9ZtbAoGAcsb6mMEI3nXaCO8MSoU9\nUOZiJ1KeX5M+Gs/zrNbFHTDjk+yi5/Ra9PR0HEQkv4wd8zQdyrzGv4nwVwUaF+WR\nOiUyG5LX/wDw91aj/BVnMH9ESHJWcWyqdxAP8WhxVr0zLn65bSnyY+1uuAr7BuOr\nvEjkhPtmISB1bD/2NsHGG00CgYAxj803lft9z+lSq0fZYAoXF6APvf8BIOwg4svL\nenJePbzoFK6z3A/wyaeHdRqVtKchr87xDZmvjif5IvhgepQlSGqqoo3irLxOi2NS\nM8BCD00sus2qq+T2hOeJGJGgW+yHtCh+0MZhbqqHJzHZb31sQCpg9dIakXLJEZ6T\nPyX6WQKBgAi3kcFBFnjD3k5nDuMs+tFP4kvBWjBIsoEO0a7RwkJfziPCnI4e3bJZ\nWH6XaabCaIsiycWJaCraks1GyrzTK3XYxikLUq2tiG7yjFVFqj9w/g0cJFLF0wF4\nDlwXnuPA4T3IsGEYczW9Ll3nvfVauyWWvmLF84R1hCOA/m1aHopc\n-----END RSA PRIVATE KEY-----\n"
+                  ]]
+                },
+                "mode" : "000600"
+              },
+              "/home/puppetmaster_puppet_aws/.ssh/id_rsa.pub" : {
+                "content" : { "Fn::Join" : ["", [
+"ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC5m8gKSpTO12vThWUssT6TWG2NW6d1aQhgIgi0g6r1qBQEyssUPKN+1N7u+xDx7fBZiRTr5F35AqfSy7HcqW796XDiDdm5+m/93YjsQXlslcGvq5eSEh2e6kf/4eyy15UnDKNabBo+QjN+x6lLfS5oIk6PvQ3cFC9/K5QyLHjvBEBd+Jy3qOUf+9DDLDeozZ1l1pgu0YUUR7XCWlAn7kOuiEYDiX1ikkEFgpd7lxj22WhIf+05ZAPquBsKgLA8ki7uVh9Pp+TswvgtFKUQ+K39hZYtI/Z6yM2scWcNjDOYzgBtgTAel0ZQgdIXHiCfR29QoFXy8YBjOFDSmRQd5TTh puppetmaster_whispir_aws\n"
+                  ]]
+                },
+                "mode" : "000600"
+              },
+              "/home/puppetmaster_puppet_aws/.ssh/config" : {
+                "content" : { "Fn::Join" : ["", [
+"CheckHostIP no\nStrictHostKeyChecking no\nUserKnownHostsFile /dev/null\nLogLevel quiet\nServerAliveCountMax 3\n"
+                  ]]
+                },
+                "mode" : "000600"
+              }
+            },
+            "commands" : {
+              "100" : {
+                "command" : "mkfs.xfs /dev/xvdc",
+                "test" : "test \"$(file - < /dev/xvdc)\" == '/dev/stdin: data'"
+              },
+              "110" : {
+                "command" : "mkdir -p /mnt/persistent-1"
+              },
+              "120" : {
+                "command" : "echo '/dev/xvdc /mnt/persistent-1 xfs defaults 0 2' >> /etc/fstab",
+                "test" : "! grep -q ' /mnt/persistent-1 ' /etc/fstab"
+              },
+              "130" : {
+                "command" : "mount /mnt/persistent-1",
+                "test" : "! mount | grep -q ' /mnt/persistent-1 '"
+              },
+              "140" : {
+                "command" : "mkdir -p /var/puppet /var/lib/puppet /mnt/persistent-1/var/puppet /mnt/persistent-1/var/lib/puppet"
+              },
+              "150" : {
+                "command" : "chown puppet.puppet /mnt/persistent-1/var/puppet /mnt/persistent-1/var/lib/puppet"
+              },
+              "160" : {
+                "command" : "echo '/mnt/persistent-1/var/lib/puppet /var/lib/puppet none bind 0 0' >> /etc/fstab",
+                "test" : "! grep -q ' /var/lib/puppet ' /etc/fstab"
+              },
+              "170" : {
+                "command" : "mount /var/lib/puppet",
+                "test" : "! mount | grep -q ' /var/lib/puppet '"
+              },
+              "180" : {
+                "command" : "echo '/mnt/persistent-1/var/puppet /var/puppet none bind 0 0' >> /etc/fstab",
+                "test" : "! grep -q ' /var/puppet ' /etc/fstab"
+              },
+              "190" : {
+                "command" : "mount /var/puppet",
+                "test" : "! mount | grep -q ' /var/puppet '"
+              },
+              "200" : {
+                "command" : "useradd -U -r -s /bin/bash puppetmaster_puppet_aws",
+                "test" : "! grep -q '^puppetmaster_puppet_aws:' /etc/passwd"
+              },
+              "300" : {
+                "command" : "mkdir -p /var/puppet/environments/branches /var/puppet/environments/mirrors"
+              },
+              "310" : {
+                "command" : "chmod 0755 /var/puppet/environments /var/puppet/environments/branches /var/puppet/environments/mirrors"
+              },
+              "400" : {
+                "command" : "chown -R puppetmaster_puppet_aws.puppetmaster_puppet_aws /home/puppetmaster_puppet_aws"
+              },
+              "410" : {
+                "command" : "chmod 0700 /home/puppetmaster_puppet_aws/.ssh"
+              },
+              "420" : {
+                "command" : "chown -R puppetmaster_puppet_aws.puppetmaster_puppet_aws /var/puppet"
+              },
+              "500" : {
+                "command" : "su - puppetmaster_puppet_aws -c 'git clone --mirror git@git.whispir.net:puppet/aws.git /var/puppet/environments/mirrors/puppet_aws'",
+                "test" : "test ! -e /var/puppet/environments/mirrors/puppet_aws/config"
+              },
+              "510" : {
+                "command" : "su - puppetmaster_puppet_aws -c 'git clone /var/puppet/environments/mirrors/puppet_aws /var/puppet/environments/branches/master'",
+                "test" : "test ! -e /var/puppet/environments/branches/master/.git"
+              },
+              "520" : {
+                "command" : "su - puppetmaster_puppet_aws -c 'ln -s branches/master /var/puppet/environments/production'",
+                "test" : "test ! -L /var/puppet/environments/production"
+              },
+              "600" : {
+                "command" : "cp -a /etc/puppet/puppet.conf.CF /etc/puppet/puppet.conf; uuid=$(facter uuid); sed -i -e s'/<%= @uuid[^>]*>/'${uuid,,}'/' /etc/puppet/puppet.conf",
+                "test" : "! grep -q '^\\s*server\\>' /etc/puppet/puppet.conf"
+              },
+              "700" : {
+                "command" : "puppet module install puppetlabs-stdlib",
+                "test" : "test ! -d /etc/puppet/modules/stdlib"
+              },
+              "701" : {
+                "command" : "puppet module install puppetlabs-concat",
+                "test" : "test ! -d /etc/puppet/modules/concat"
+              },
+              "702" : {
+                "command" : "puppet module install puppetlabs-postgresql",
+                "test" : "test ! -d /etc/puppet/modules/postgresql"
+              },
+              "703" : {
+                "command" : "puppet module install puppetlabs-lvm",
+                "test" : "test ! -d /etc/puppet/modules/lvm"
+              },
+              "710" : {
+                "command" : "gem install deep_merge",
+                "test" : "! gem list | fgrep -q deep_merge"
+              }
+            },
+            "services" : {
+              "sysvinit" : {
+                "puppetmaster" : {
+                  "enabled" : "true",
+                  "ensureRunning" : "true"
+                }
+              }
+            }
+          },
+          "puppetagent" : {
+            "packages" : {
+              "yum" : {
+                "puppet" : []
+              }
+            },
+            "files" : {
+            },
+            "services" : {
+              "sysvinit" : {
+                "puppet" : {
+                  "enabled" : "true",
+                  "ensureRunning" : "true"
+                }
+              }
+            }
+          }
+        }
+      },
+      "Properties" : {
+        "InstanceType" : "t2.micro",
+        "DisableApiTermination" : "false",
+        "KeyName"  : { "Ref" : "KeyPairName" },
+        "ImageId" : "ami-1b9e4a78",
+        "NetworkInterfaces" : [{
+          "GroupSet"                 : [ "sg-f3b1ba96", "sg-f9b1ba9c", { "Ref" : "PuppetMasterIngress" } ],
+          "DeviceIndex"              : "0",
+          "DeleteOnTermination"      : "true",
+          "SubnetId"                 : "subnet-4f045e2a"
+        }],
+        "Volumes" : [
+          { "VolumeId" : "vol-604368ba", "Device" : "/dev/sdc" }
+        ],
+        "Tags" : [
+          { "Key" : "Name", "Value" : "puppet" }
+        ],
+"UserData": "Q29udGVudC1UeXBlOiBtdWx0aXBhcnQvbWl4ZWQ7IGJvdW5kYXJ5PSI9PT09PT09PT09PT09PT1wdXBwZXQ9PSIKTUlNRS1WZXJzaW9uOiAxLjAKCi0tPT09PT09PT09PT09PT09cHVwcGV0PT0KQ29udGVudC1UeXBlOiB0ZXh0L2Nsb3VkLWNvbmZpZzsgY2hhcnNldD0idXMtYXNjaWkiCk1JTUUtVmVyc2lvbjogMS4wCkNvbnRlbnQtVHJhbnNmZXItRW5jb2Rpbmc6IDdiaXQKQ29udGVudC1EaXNwb3NpdGlvbjogYXR0YWNobWVudDsgZmlsZW5hbWU9ImNsb3VkLWNvbmZpZyIKCiNjbG91ZC1jb25maWcKCnNzaF9wd2F1dGg6IHRydWUKZnFkbjogcHVwcGV0LmFwLXNvdXRoZWFzdC0xLnNnMS1kZXYuaW50ZXJuYWwKCi0tPT09PT09PT09PT09PT09cHVwcGV0PT0KQ29udGVudC1UeXBlOiB0ZXh0L3gtc2hlbGxzY3JpcHQ7IGNoYXJzZXQ9InVzLWFzY2lpIgpNSU1FLVZlcnNpb246IDEuMApDb250ZW50LVRyYW5zZmVyLUVuY29kaW5nOiA3Yml0CkNvbnRlbnQtRGlzcG9zaXRpb246IGF0dGFjaG1lbnQ7IGZpbGVuYW1lPSJib290LXNjcmlwdCIKCiMhL2Jpbi9iYXNoIC14CiMgSW5zdGFsbCB0aGUgZmlsZXMgYW5kIHBhY2thZ2VzIGZyb20gdGhlIG1ldGFkYXRhCi9vcHQvYXdzL2Jpbi9jZm4taW5pdCAtdiAtLXN0YWNrIGFwLXNvdXRoZWFzdC0xLXB1cHBldG1hc3RlciAtLXJlc291cmNlIHB1cHBldCAtLXJlZ2lvbiBhcC1zb3V0aGVhc3QtMQojIFNpZ25hbCB0aGUgc3RhdHVzIGZyb20gY2ZuLWluaXQKL29wdC9hd3MvYmluL2Nmbi1zaWduYWwgLWUgJD8gLS1zdGFjayBhcC1zb3V0aGVhc3QtMS1wdXBwZXRtYXN0ZXIgLS1yZXNvdXJjZSBwdXBwZXQgLS1yZWdpb24gYXAtc291dGhlYXN0LTEKCi0tPT09PT09PT09PT09PT09cHVwcGV0PT0tLQo="
+      }
+    }
+  }
+}

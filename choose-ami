@@ -1,0 +1,69 @@
+#!/bin/bash
+
+# Choose the AMI for an instance.  This can come from one of four places, in
+# this order:
+#
+# 1) Environment variable AMI_ID_<resource_name>.
+# 2) Environment variable AMI_VERSION_<resource_name>.
+# 3) File generated/<account>/<stack-name>, field "ImageId".
+# 4) The latest AMI for the region, taken from the file containing the AMI
+#    list.
+#
+# (4) is used for the first build of an instance.
+# (3) is used to preserve the AMI that the instance was previously built with.
+#     This avoids spurious rebuilds just because a new AMI is available.
+# (2) and (1) are used to override the existing AMI and force a particular AMI
+#     version or id to be used.
+#
+# AMI_VERSION_<resource_name> can be 'latest' or it can be a time stamp
+# (ccyy-mm-dd-hh-mm).
+#
+# AMI_ID_<resource_name> is useful when you want to use an explicit AMI that is
+# not in the file containing the AMI versions.
+#
+# Parameters are:
+#   Resource name.
+#   File name containing the generated stack for this resource.
+#   * The file name must be supplied, but the file does not have to exist.
+#   Region.
+#   File containing the AMI list for this instance.
+
+set -e
+set -o pipefail
+
+resource_name=${1:?"Missing resource name"}
+generated_file=${2:?"Missing generated file name"}
+region=${3:?"Missing region name"}
+ami_list=${4:?"Missing AMI list file"}
+shift 4
+
+eval image_id="\${AMI_ID_${resource_name:?}}"
+
+if [[ -z "${image_id}" ]]
+then
+	eval version="\${AMI_VERSION_${resource_name:?}}"
+	if [[ -z "${version}" ]]
+	then
+		# Use the image_id if it exists, otherwise default to the
+		# latest image.
+		version=latest
+		# Only use the AMI from the generated file if the file exists and
+		# "ImageId" is a scalar, not a hash.
+		if [[ -r "${generated_file:?}" ]]
+		then
+			image_id=$(sed -ne '/^\s*"ImageId" *: *[^{]*$/ { s/"[^"]*$//; s/.*"//; p; };' "${generated_file:?}")
+		fi
+	fi
+fi
+
+if [[ -z "${image_id}" ]]
+then
+	image_id=$(sed -ne "s/^${region:?} ${version:?} //p;" ${ami_list:?})
+	if [[ -z "${image_id}" ]]
+	then
+		echo Cannot find AMI version ${version:?} for region ${region:?} in ${ami_list:?} >&2
+		exit 1
+	fi
+fi
+
+echo ${image_id:?}

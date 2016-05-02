@@ -1,0 +1,58 @@
+#!/usr/bin/expect -f
+
+# Connect to a Fortigate firewall with the supplied user and password.  Send
+# each command from the defined file, waiting for the firewall to respond
+# before sending the next line.  This avoids buffer overrun problems that can occur if you
+# send the entire set of commands without waiting for a response.
+#
+# Parameters:
+#   user@IP or user@hostname.
+#   Password
+#   File containing commands.
+
+set username [lindex $argv 0];
+set password [lindex $argv 1];
+set commands [lindex $argv 2];
+
+set f [open "$commands"]
+set commands [split [read $f] "\n"]
+close $f
+
+set timeout 60
+spawn ssh -o CheckHostIP=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ControlMaster=no $username
+expect_after {
+	timeout {
+		send_error "Error: timeout\n"
+		close
+		wait
+		return 1
+	}
+	eof {
+		send_error "Error: premature eof\n"
+		wait
+		return 1
+	}
+}
+expect " password:"
+set timeout 60
+send_user "**********\n"
+send "$password\r"
+expect "# "
+send "config system console\r"
+expect "# "
+send "set output standard\r"
+expect "# "
+send "end\r"
+expect "# "
+
+foreach cmd $commands {
+	# Comments look like prompts so strip them.  Also strip blank lines.
+	regsub #.* $cmd "" cmd
+	if { [regexp . $cmd] } {
+		send "$cmd\r"
+		expect "# "
+	}
+}
+
+send "exit\r"
+expect eof

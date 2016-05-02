@@ -1,0 +1,19 @@
+#!/bin/bash
+
+# Generate the list of RHEL7 golden images by region and version.  This is a
+# plain text list, not a JSON map.
+#
+# The calling environment must contain the required credentials for the target
+# account.
+
+set -e
+set -o pipefail
+
+source ./functions
+
+# Override these settings from the environment if necessary.
+
+: ${AMI_PREFIX=rhel7golden}
+: ${AMI_OWNER=$(./map-account-number ${CENTRAL_ACCOUNT:?})}
+
+./generate-ami-list ${AMI_PREFIX:?} ${AMI_OWNER:?} > generated/rhel7-golden-list

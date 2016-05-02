@@ -1,0 +1,109 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  "Description" : "Define a RHEL7 golden image",
+  "Parameters" : {
+    "KeyPairName" : {
+      "Description" : "Name of an existing EC2 KeyPair (find or create here: https://console.aws.amazon.com/ec2/v2/home#KeyPairs: )",
+      "Type" : "String",
+      "MinLength": "1",
+      "MaxLength": "64",
+      "Default" : "whispir_common",
+      "AllowedPattern" : "[-_ a-zA-Z0-9]*",
+      "ConstraintDescription" : "can contain only alphanumeric characters, spaces, dashes and underscores."
+    }
+  },
+  "Mappings" : {
+    "AmiMap" : {
+      "ap-southeast-2" : { "AMI" : "ami-e0c19f83" }
+   }
+  },
+  "Resources" : {
+    "rhel7golden" : {
+      "Type" : "AWS::EC2::Instance",
+      "CreationPolicy" : {
+        "ResourceSignal" : {
+          "Timeout" : "PT20M"
+        }
+      },
+      "Metadata" : {
+        "AWS::CloudFormation::Init" : {
+          "configSets" : {
+            "default"    : [ "goldenbase" ]
+          },
+          "goldenbase" : {
+            "files" : {
+              "/etc/init.d/iptables" : {
+                "content" : { "Fn::Join" : ["", [
+"#!/bin/sh\n#\n# iptables       Start iptables firewall\n#\n# chkconfig: 2345 08 92\n# description:     Starts, stops and saves iptables firewall\n#\n# config: /etc/sysconfig/iptables\n# config: /etc/sysconfig/iptables-config\n#\n### BEGIN INIT INFO\n# Provides: iptables\n# Required-Start:\n# Required-Stop:\n# Default-Start: 2 3 4 5\n# Default-Stop: 0 1 6\n# Short-Description: start and stop iptables firewall\n# Description: Start, stop and save iptables firewall\n### END INIT INFO\n\n# Source function library.\n. /etc/init.d/functions\n\nIPTABLES=iptables\nIPTABLES_DATA=/etc/sysconfig/$IPTABLES\nIPTABLES_CONFIG=/etc/sysconfig/${IPTABLES}-config\nIPV=${IPTABLES%tables} # ip for ipv4 | ip6 for ipv6\n[ \"$IPV\" = \"ip\" ] && _IPV=\"ipv4\" || _IPV=\"ipv6\"\nPROC_IPTABLES_NAMES=/proc/net/${IPV}_tables_names\nVAR_SUBSYS_IPTABLES=/var/lock/subsys/$IPTABLES\n\nif [ ! -x /sbin/$IPTABLES ]; then\n    echo -n $\"${IPTABLES}: /sbin/$IPTABLES does not exist.\"; warning; echo\n    exit 5\nfi\n\n# Old or new modutils\n/sbin/modprobe --version 2>&1 | grep -q module-init-tools \\\n    && NEW_MODUTILS=1 \\\n    || NEW_MODUTILS=0\n\n# Default firewall configuration:\nIPTABLES_MODULES=\"\"\nIPTABLES_MODULES_UNLOAD=\"yes\"\nIPTABLES_SAVE_ON_STOP=\"no\"\nIPTABLES_SAVE_ON_RESTART=\"no\"\nIPTABLES_SAVE_COUNTER=\"no\"\nIPTABLES_STATUS_NUMERIC=\"yes\"\nIPTABLES_STATUS_VERBOSE=\"no\"\nIPTABLES_STATUS_LINENUMBERS=\"yes\"\n\n# Load firewall configuration.\n[ -f \"$IPTABLES_CONFIG\" ] && . \"$IPTABLES_CONFIG\"\n\n# Netfilter modules\nNF_MODULES=($(lsmod | awk \"/^${IPV}table_/ {print \\$1}\") ${IPV}_tables)\nNF_MODULES_COMMON=(x_tables nf_nat nf_conntrack) # Used by netfilter v4 and v6\n\n# Get active tables\nNF_TABLES=$(cat \"$PROC_IPTABLES_NAMES\" 2>/dev/null)\n\n\nrmmod_r() {\n    # Unload module with all referring modules.\n    # At first all referring modules will be unloaded, then the module itself.\n    local mod=$1\n    local ret=0\n    local ref=\n\n    # Get referring modules.\n    # New modutils have another output format.\n    [ $NEW_MODUTILS = 1 ] \\\n        && ref=$(lsmod | awk \"/^${mod}/ { print \\$4; }\" | tr ',' ' ') \\\n   || ref=$(lsmod | grep ^${mod} | cut -d \"[\" -s -f 2 | cut -d \"]\" -s -f 1)\n\n    # recursive call for all referring modules\n    for i in $ref; do\n rmmod_r $i\n    let ret+=$?;\n    done\n\n    # Unload module.\n    # The extra test is for 2.6: The module might have autocleaned,\n    # after all referring modules are unloaded.\n    if grep -q \"^${mod}\" /proc/modules ; then\n modprobe -r $mod > /dev/null 2>&1\n     res=$?\n        [ $res -eq 0 ] || echo -n \" $mod\"\n   let ret+=$res;\n    fi\n\n    return $ret\n}\n\nflush_n_delete() {\n    # Flush firewall rules and delete chains.\n    [ ! -e \"$PROC_IPTABLES_NAMES\" ] && return 0\n\n    # Check if firewall is configured (has tables)\n    [ -z \"$NF_TABLES\" ] && return 1\n\n    echo -n $\"${IPTABLES}: Flushing firewall rules: \"\n    ret=0\n    # For all tables\n    for i in $NF_TABLES; do\n        # Flush firewall rules.\n   $IPTABLES -t $i -F;\n   let ret+=$?;\n\n        # Delete firewall chains.\n     $IPTABLES -t $i -X;\n   let ret+=$?;\n\n        # Set counter to zero.\n        $IPTABLES -t $i -Z;\n   let ret+=$?;\n    done\n\n    [ $ret -eq 0 ] && success || failure\n    echo\n    return $ret\n}\n\nset_policy() {\n    # Set policy for configured tables.\n    policy=$1\n\n    # Check if iptable module is loaded\n    [ ! -e \"$PROC_IPTABLES_NAMES\" ] && return 0\n\n    # Check if firewall is configured (has tables)\n    tables=$(cat \"$PROC_IPTABLES_NAMES\" 2>/dev/null)\n    [ -z \"$tables\" ] && return 1\n\n    echo -n $\"${IPTABLES}: Setting chains to policy $policy: \"\n    ret=0\n    for i in $tables; do\n   echo -n \"$i \"\n       case \"$i\" in\n            raw)\n              $IPTABLES -t raw -P PREROUTING $policy \\\n                 && $IPTABLES -t raw -P OUTPUT $policy \\\n              || let ret+=1\n             ;;\n        filter)\n                $IPTABLES -t filter -P INPUT $policy \\\n              && $IPTABLES -t filter -P OUTPUT $policy \\\n                   && $IPTABLES -t filter -P FORWARD $policy \\\n                  || let ret+=1\n             ;;\n        nat)\n              $IPTABLES -t nat -P PREROUTING $policy \\\n                 && $IPTABLES -t nat -P POSTROUTING $policy \\\n                 && $IPTABLES -t nat -P OUTPUT $policy \\\n              || let ret+=1\n             ;;\n        mangle)\n           $IPTABLES -t mangle -P PREROUTING $policy \\\n              && $IPTABLES -t mangle -P POSTROUTING $policy \\\n              && $IPTABLES -t mangle -P INPUT $policy \\\n                    && $IPTABLES -t mangle -P OUTPUT $policy \\\n                   && $IPTABLES -t mangle -P FORWARD $policy \\\n                  || let ret+=1\n             ;;\n        *)\n                let ret+=1\n            ;;\n        esac\n    done\n\n    [ $ret -eq 0 ] && success || failure\n    echo\n    return $ret\n}\n\nstart() {\n    # Do not start if there is no config file.\n    [ ! -f \"$IPTABLES_DATA\" ] && return 6\n\n    # check if ipv6 module load is deactivated\n    if [ \"${_IPV}\" = \"ipv6\" ] \\\n        && grep -qIsE \"^install[[:space:]]+${_IPV}[[:space:]]+/bin/(true|false)\" /etc/modprobe.conf /etc/modprobe.d/* ; then\n        echo $\"${IPTABLES}: ${_IPV} is disabled.\"\n   return 150\n    fi\n\n    echo -n $\"${IPTABLES}: Applying firewall rules: \"\n\n    OPT=\n    [ \"x$IPTABLES_SAVE_COUNTER\" = \"xyes\" ] && OPT=\"-c\"\n\n    $IPTABLES-restore $OPT $IPTABLES_DATA\n    if [ $? -eq 0 ]; then\n       success; echo\n    else\n       failure; echo; return 1\n    fi\n\n    # Load additional modules (helpers)\n    if [ -n \"$IPTABLES_MODULES\" ]; then\n echo -n $\"${IPTABLES}: Loading additional modules: \"\n        ret=0\n for mod in $IPTABLES_MODULES; do\n          echo -n \"$mod \"\n     modprobe $mod > /dev/null 2>&1\n        let ret+=$?;\n      done\n  [ $ret -eq 0 ] && success || failure\n  echo\n    fi\n\n    touch $VAR_SUBSYS_IPTABLES\n    return $ret\n}\n\nstop() {\n    # Do not stop if iptables module is not loaded.\n    [ ! -e \"$PROC_IPTABLES_NAMES\" ] && return 0\n\n    flush_n_delete\n    set_policy ACCEPT\n\n    if [ \"x$IPTABLES_MODULES_UNLOAD\" = \"xyes\" ]; then\n      echo -n $\"${IPTABLES}: Unloading modules: \"\n ret=0\n for mod in ${NF_MODULES[*]}; do\n           rmmod_r $mod\n          let ret+=$?;\n      done\n  # try to unload remaining netfilter modules used by ipv4 and ipv6\n     # netfilter\n   for mod in ${NF_MODULES_COMMON[*]}; do\n            rmmod_r $mod >/dev/null\n   done\n  [ $ret -eq 0 ] && success || failure\n  echo\n    fi\n\n    rm -f $VAR_SUBSYS_IPTABLES\n    return $ret\n}\n\nsave() {\n    # Check if iptable module is loaded\n    [ ! -e \"$PROC_IPTABLES_NAMES\" ] && return 0\n\n    # Check if firewall is configured (has tables)\n    [ -z \"$NF_TABLES\" ] && return 6\n\n    echo -n $\"${IPTABLES}: Saving firewall rules to $IPTABLES_DATA: \"\n\n    OPT=\n    [ \"x$IPTABLES_SAVE_COUNTER\" = \"xyes\" ] && OPT=\"-c\"\n\n    ret=0\n    TMP_FILE=$(/bin/mktemp -q /tmp/$IPTABLES.XXXXXX) \\\n    && chmod 600 \"$TMP_FILE\" \\\n && $IPTABLES-save $OPT > $TMP_FILE 2>/dev/null \\\n     && size=$(stat -c '%s' $TMP_FILE) && [ $size -gt 0 ] \\\n       || ret=1\n    if [ $ret -eq 0 ]; then\n if [ -e $IPTABLES_DATA ]; then\n            cp -f $IPTABLES_DATA $IPTABLES_DATA.save \\\n               && chmod 600 $IPTABLES_DATA.save \\\n           || ret=1\n      fi\n    if [ $ret -eq 0 ]; then\n           cp -f $TMP_FILE $IPTABLES_DATA \\\n         && chmod 600 $IPTABLES_DATA \\\n                || ret=1\n      fi\n    fi\n    [ $ret -eq 0 ] && success || failure\n    echo\n    rm -f $TMP_FILE\n    return $ret\n}\n\nstatus() {\n    if [ ! -f \"$VAR_SUBSYS_IPTABLES\" -a -z \"$NF_TABLES\" ]; then\n    echo $\"${IPTABLES}: Firewall is not running.\"\n       return 3\n    fi\n\n    # Do not print status if lockfile is missing and iptables modules are not\n    # loaded.\n    # Check if iptable modules are loaded\n    if [ ! -e \"$PROC_IPTABLES_NAMES\" ]; then\n   echo $\"${IPTABLES}: Firewall modules are not loaded.\"\n       return 3\n    fi\n\n    # Check if firewall is configured (has tables)\n    if [ -z \"$NF_TABLES\" ]; then\n    echo $\"${IPTABLES}: Firewall is not configured. \"\n   return 3\n    fi\n\n    NUM=\n    [ \"x$IPTABLES_STATUS_NUMERIC\" = \"xyes\" ] && NUM=\"-n\"\n    VERBOSE=\n    [ \"x$IPTABLES_STATUS_VERBOSE\" = \"xyes\" ] && VERBOSE=\"--verbose\"\n    COUNT=\n    [ \"x$IPTABLES_STATUS_LINENUMBERS\" = \"xyes\" ] && COUNT=\"--line-numbers\"\n\n    for table in $NF_TABLES; do\n        echo $\"Table: $table\"\n       $IPTABLES -t $table --list $NUM $VERBOSE $COUNT && echo\n    done\n\n    return 0\n}\n\nrestart() {\n    [ \"x$IPTABLES_SAVE_ON_RESTART\" = \"xyes\" ] && save\n    stop\n    start\n}\n\n\ncase \"$1\" in\n    start)\n        [ -f \"$VAR_SUBSYS_IPTABLES\" ] && exit 0\n     start\n RETVAL=$?\n     ;;\n    stop)\n [ \"x$IPTABLES_SAVE_ON_STOP\" = \"xyes\" ] && save\n    stop\n  RETVAL=$?\n     ;;\n    restart|force-reload)\n restart\n       RETVAL=$?\n     ;;\n    condrestart|try-restart)\n      [ ! -e \"$VAR_SUBSYS_IPTABLES\" ] && exit 0\n   restart\n       RETVAL=$?\n     ;;\n    status)\n       status\n        RETVAL=$?\n     ;;\n    panic)\n        flush_n_delete\n        set_policy DROP\n       RETVAL=$?\n        ;;\n    save)\n      save\n  RETVAL=$?\n     ;;\n    *)\n    echo $\"Usage: ${IPTABLES} {start|stop|restart|condrestart|status|panic|save}\"\n       RETVAL=2\n      ;;\nesac\n\nexit $RETVAL\n"
+                  ]]
+                },
+                "mode" : "000755"
+              },
+              "/etc/init.d/boot_signal" : {
+                "content" : { "Fn::Join" : ["", [
+"#!/bin/sh\n#\n# boot_signal Send a signal to the name servers when this system boots\n#\n# chkconfig: 2345 12 88\n# description: Send a signal to the name servers when this system boots\n#\n### BEGIN INIT INFO\n# Provides: boot_signal\n# Required-Start:\n# Required-Stop:\n# Default-Start: 2 3 4 5\n# Default-Stop: 0 1 6\n# Short-Description: Send a signal to the name servers when this system boots\n# Description: Send a signal to the name servers when this system boots. Also\n#              update /etc/hosts with the latest ip, hostname and domain for\n#              this host.\n### END INIT INFO\n\n# Source function library.\n. /etc/init.d/functions\n\nsource /etc/sysconfig/network-scripts/VPCData\n\nstart() {\n  ret=0\n  # Just send a blank line (stdin is '') to both VPC name servers.\n  nc -w 10 ${VPCNameServer1?} 42 <<<''\n  nc -w 10 ${VPCNameServer2?} 42 <<<''\n  hostname=$(sed -ne 's/^path=Resources.\\([^.]*\\).Metadata.AWS::CloudFormation::Init$/\\1/p;' /etc/cfn/hooks.d/cfn-auto-reloader.conf 2>/dev/null | tr '[A-Z]' '[a-z]')\n  domain=$(sed -ne 's/^search //p;' /etc/resolv.conf)\n  ip=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)\n  if [[ -n \"$hostname\" && -n \"$domain\" && -n \"$ip\" ]]\n  then\n    sed -i -e \"/^$ip\\>/d\" /etc/hosts\n    echo \"$ip $hostname.$domain $hostname\" >> /etc/hosts\n  else\n    echo \"Not updating /etc/hosts, insufficient data: ip $ip, hostname $hostname, domain $domain\" >&2\n    ret=1\n  fi\n  if [ $ret -eq 0 ]; then\n    success; echo\n  else\n    failure; echo; return $ret\n  fi\n}\n\nstop() {\n  # Not a long running service, nothing to stop\n  return 0\n}\n\nrestart() {\n  stop\n  start\n}\n\ncase \"$1\" in\n  start) start; RETVAL=$?; ;;\n  stop) stop; RETVAL=$?; ;;\n  restart|force-reload|reload) restart; RETVAL=$?; ;;\n  *) echo \"Usage: boot_signal {start|stop|restart|force_reload|reload}\"; RETVAL=2; ;;\nesac\n\nexit $RETVAL\n"
+                  ]]
+                },
+                "mode" : "000755"
+              },
+              "/etc/cron.d/delete_bak" : {
+                "content" : { "Fn::Join" : ["", [
+"MAILTO = alerts@whispir.com\n\n# cfn-hup creates .bak files when CF changes a file.  Some services (e.g. cron)\n# will execute those .bak files, causing errors.  Delete all .bak files under\n# /etc every 10 minutes.\n#\n# Do not delete .bak files under /var, some of the puppet application\n# repositories have .bak files :-(.\n\n# Some systems do not have sbin on the path :-(\n\nPATH=/sbin:/bin:/usr/sbin:/usr/bin\n\n*/10 * * * * root find /etc -xdev -name '*.bak' -type f -delete\n"
+                  ]]
+                },
+                "mode" : "000644"
+              },
+              "/etc/logrotate.conf" : {
+                "content" : { "Fn::Join" : ["", [
+"daily\nrotate 90\ncreate\ndateext\ncompress\ninclude /etc/logrotate.d\n/var/log/wtmp {\n    monthly\n    create 0664 root utmp\n    minsize 1M\n    rotate 1\n}\n/var/log/btmp {\n    missingok\n    monthly\n    create 0600 root utmp\n    rotate 1\n}\n"
+                  ]]
+                },
+                "mode" : "000644"
+              },
+              "/etc/profile.d/custom.sh" : {
+                "content" : { "Fn::Join" : ["", [
+"MAIN_COLOR=\"$(tput setaf 1)\"\nSECONDARY_COLOR=\"$(tput setaf 3)\"\nCLEAR_COLOR=\"$(tput setaf 7)\"\n\nPS1=\"${MAIN_COLOR}[AWS-PROD]${CLEAR_COLOR}\\u@\\h:\\W \\$ ${CLEAR_COLOR}\"\nexport PS1\n\nPROMPT_COMMAND='history -a >(tee -a ~/.bash_history | logger -t \"$USER[$$] $SSH_CONNECTION\")'\n\nshopt -s checkwinsize\nshopt -s histappend\nexport HISTSIZE=10000\nexport HISTFILESIZE=100000\nexport HISTTIMEFORMAT=\"%F %T \"\nexport HISTCONTROL=ignoredups\n[ -z \"$LESS\" ] && export LESS=\"-M -I -e -j10 -S\"\n\nalias cp='cp -i'\nalias l.='ls -d .* --color=tty'\nalias ll='ls -l --color=tty'\nalias ls='ls --color=tty'\nalias mv='mv -i'\nalias rm='rm -i'\nalias which='alias | /usr/bin/which --tty-only --read-alias --show-dot --show-tilde'\numask 0002\n"
+                  ]]
+                },
+                "mode" : "000644"
+              }
+            }
+          }
+        }
+      },
+      "Properties" : {
+        "InstanceType" : "t2.small",
+        "DisableApiTermination" : "false",
+        "KeyName"  : { "Ref" : "KeyPairName" },
+        "ImageId" : { "Fn::FindInMap" : [ "AmiMap", { "Ref" : "AWS::Region" }, "AMI" ]},
+        "NetworkInterfaces" : [{
+          "GroupSet"                 : [ "sg-c4745ba1" ],
+          "AssociatePublicIpAddress" : "false",
+          "DeviceIndex"              : "0",
+          "DeleteOnTermination"      : "true",
+          "SubnetId"                 : "subnet-4764e230"
+        }],
+        "BlockDeviceMappings" : [
+          {
+            "DeviceName" : "/dev/sda1",
+            "Ebs" : { "VolumeSize" : "12" }
+          },
+          {
+            "DeviceName" : "/dev/sdb",
+            "Ebs" : { "VolumeSize" : "4" }
+          }
+        ],
+        "Tags" : [
+          { "Key" : "Name", "Value" : "rhel7golden" }
+        ],
+        "UserData": "Q29udGVudC1UeXBlOiBtdWx0aXBhcnQvbWl4ZWQ7IGJvdW5kYXJ5PSI9PT09PT09PT09PT09PT1yaGVsN2dvbGRlbj09IgpNSU1FLVZlcnNpb246IDEuMAoKLS09PT09PT09PT09PT09PT1yaGVsN2dvbGRlbj09CkNvbnRlbnQtVHlwZTogdGV4dC9jbG91ZC1jb25maWc7IGNoYXJzZXQ9InVzLWFzY2lpIgpNSU1FLVZlcnNpb246IDEuMApDb250ZW50LVRyYW5zZmVyLUVuY29kaW5nOiA3Yml0CkNvbnRlbnQtRGlzcG9zaXRpb246IGF0dGFjaG1lbnQ7IGZpbGVuYW1lPSJjbG91ZC1jb25maWciCgojY2xvdWQtY29uZmlnCgpib290Y21kOgogIC0gc2V0ZW5mb3JjZSAwCiAgLSBzZWQgLWkgJy9eXHMqU0VMSU5VWD0vcy8uKi9TRUxJTlVYPWRpc2FibGVkLzsnIC9ldGMvc3lzY29uZmlnL3NlbGludXggL2V0Yy9zZWxpbnV4L2NvbmZpZwoKc3NoX3B3YXV0aDogdHJ1ZQoKLS09PT09PT09PT09PT09PT1yaGVsN2dvbGRlbj09CkNvbnRlbnQtVHlwZTogdGV4dC94LXNoZWxsc2NyaXB0OyBjaGFyc2V0PSJ1cy1hc2NpaSIKTUlNRS1WZXJzaW9uOiAxLjAKQ29udGVudC1UcmFuc2Zlci1FbmNvZGluZzogN2JpdApDb250ZW50LURpc3Bvc2l0aW9uOiBhdHRhY2htZW50OyBmaWxlbmFtZT0iYm9vdC1zY3JpcHQiCgojIS9iaW4vYmFzaCAteAoKIyBSZW1vdmUgcGFja2FnZXMgdGhhdCBhcmUgdXNlbGVzcyBvbiBhIHNlcnZlciBvciB0aGV5IGFyZSBpbmNsdWRlZCBpbiBSSEVMNwojIGJ1dCB3ZSBkbyBub3Qgd2FudCB0aGVtLgoKc2VydmljZSBOZXR3b3JrTWFuYWdlciBzdG9wCgp5dW0gZXJhc2UgLXkgCXNlbmRtYWlsIAlOZXR3b3JrTWFuYWdlciAJTmV0d29ya01hbmFnZXItY29uZmlnLXNlcnZlciAJTmV0d29ya01hbmFnZXItbGlibm0gCWF2YWhpLWxpYnMgCWJ0cmZzLXByb2dzIAlkZXNrdG9wLWZpbGUtdXRpbHMgCWVtYWNzLWZpbGVzeXN0ZW0gCWdkaXNrIAlnc2V0dGluZ3MtZGVza3RvcC1zY2hlbWFzIAlqYW5zc29uIAl3cGFfc3VwcGxpY2FudCAKIyMjIFNlZSBodHRwOi8vaW50cmE6ODA4MC9kaXNwbGF5L1doaXNwaXIvQVdTK1JIRUw3K0FNSStHb2xkZW4rSW1hZ2UKY2QgL3RtcAojIEFkZCB0aGUgZXBlbCByZXBvc2l0b3J5CmN1cmwgLXMgLW8gZXBlbC1yZWxlYXNlLWxhdGVzdC03Lm5vYXJjaC5ycG0gaHR0cHM6Ly9kbC5mZWRvcmFwcm9qZWN0Lm9yZy9wdWIvZXBlbC9lcGVsLXJlbGVhc2UtbGF0ZXN0LTcubm9hcmNoLnJwbQpycG0gLWkgZXBlbC1yZWxlYXNlLWxhdGVzdC03Lm5vYXJjaC5ycG0KIyBhd3NjbGkgaXMgaW4gZXBlbC4gIGF3c2NsaSAtPiBweXRob24yLWJvdG9jb3JlIC0+IHB5dGhvbi1kb2N1dGlscy4KIyBweXRob24tZG9jdXRpbHMgaXMgaW4gcmh1aS1SRUdJT04tcmhlbC1zZXJ2ZXItb3B0aW9uYWwgc28gZW5hYmxlIHRoYXQgcmVwby4KeXVtLWNvbmZpZy1tYW5hZ2VyIC0tZW5hYmxlIHJodWktUkVHSU9OLXJoZWwtc2VydmVyLW9wdGlvbmFsCiMgUGFja2FnZXMgcmVxdWlyZWQgZm9yIGF3cy1jZm4tYm9vdHN0cmFwIGFuZCBhd3MgY2xpCnl1bSBpbnN0YWxsIC15IHB5dGhvbi1waXAgcHl0aG9uLWRhZW1vbiBweXN0YWNoZSBhd3NjbGkKY3VybCAtcyAtbyBhd3MtY2ZuLWJvb3RzdHJhcC1sYXRlc3QudGFyLmd6IGh0dHBzOi8vczMuYW1hem9uYXdzLmNvbS9jbG91ZGZvcm1hdGlvbi1leGFtcGxlcy9hd3MtY2ZuLWJvb3RzdHJhcC1sYXRlc3QudGFyLmd6Cm1rZGlyIGF3cy1jZm4tYm9vdHN0cmFwCmNkIGF3cy1jZm4tYm9vdHN0cmFwCnRhciB4emYgLi4vYXdzLWNmbi1ib290c3RyYXAtbGF0ZXN0LnRhci5negpjZCBhd3MtY2ZuLWJvb3RzdHJhcCoKcHl0aG9uIHNldHVwLnB5IGluc3RhbGwKY3AgL3Vzci9pbml0L3JlZGhhdC9jZm4taHVwIC9ldGMvaW5pdC5kLwpjaG1vZCBhK3ggL2V0Yy9pbml0LmQvY2ZuLWh1cAojIEFtYXpvbiBpbnN0YWxscyBhd3MtY2ZuLWJvb3RzdHJhcCBpbnRvIC9vcHQvYXdzIHNvIGFkZCB0aGF0IHBhdGgKbWtkaXIgLXAgL29wdC9hd3MKbG4gLXMgL3Vzci9iaW4vIC9vcHQvYXdzLwoKIyBQb3NpdGlvbiB0aGUgZ29sZGVuIGltYWdlIGZvciBydW5uaW5nIHB1cHBldCBhZ2VudCBidXQgZG8gbm90IHJ1biBwdXBwZXQKIyBhZ2VudC4gIFRoZSBnb2xkZW4gaW1hZ2UgaGFzIG5vIHJvbGUgYW5kIHRoZXJlIGlzIG5vIHBvaW50IGluIHJlZ2lzdGVyaW5nIGl0CiMgd2l0aCB0aGUgcHVwcGV0bWFzdGVyIHdoZW4gaXQgd2lsbCBiZSBpbW1lZGlhdGVseSBzaHV0IGRvd24uCgp5dW0gaW5zdGFsbCAteSBwdXBwZXQKCiMgSW5zdGFsbCBwYWNrYWdlcyB0aGF0IGFyZSByZXF1aXJlZCBvciBkZXNpcmFibGUgb24gZXZlcnkgUkhFTDcgYmFzZWQgc3lzdGVtLgoKeXVtIGluc3RhbGwgLXkgCW5tYXAtbmNhdCAJYXRvcCAJYmluZC11dGlscyAJYnppcDIgCWN1cmwgCWlvdG9wIAlsdm0yIAlsc29mIAlseW54IAluZXQtdG9vbHMgCW9wZW5zc2wgCXBlcmwgCXBvc3RmaXggCXBzdHJlZSAJcnN5bmMgCXN0cmFjZSAJdGNwZHVtcCAJdGVsbmV0IAl0cmVlIAl2aW0gCXdnZXQgCiMgSW5zdGFsbCB6YWJiaXggdG9vbHMuCgpncm91cGFkZCAtZyA1MTQgemFiYml4CnVzZXJhZGQgLWcgNTE0IC11IDUxNCB6YWJiaXgKZWNobyAnemFiYml4IEFMTD0oQUxMKSBOT1BBU1NXRDogQUxMJyA+IC9ldGMvc3Vkb2Vycy5kL3phYmJpeAoKcnBtIC1VdmggaHR0cDovL3JlcG8uemFiYml4LmNvbS96YWJiaXgvMy4wL3JoZWwvNy94ODZfNjQvemFiYml4LXJlbGVhc2UtMy4wLTEuZWw3Lm5vYXJjaC5ycG0KeXVtIGluc3RhbGwgLXkgCXphYmJpeC1hZ2VudCAJemFiYml4LWdldCAJemFiYml4LXNlbmRlciAKIyBBbGwgc2VydmVycyBydW4gd2l0aCBsb2NhbCB0aW1lIHNldCB0byBVVEMuCgpscyAtc2YgL3Vzci9zaGFyZS96b25laW5mby9VVEMgL2V0Yy9sb2NhbHRpbWUKCiMgQWRkIGEgbGFzdCBkaXRjaCB1c2VyLCBpbmNsdWRpbmcgZW5jcnlwdGVkIHBhc3N3b3JkLiAgVW5mb3J0dW5hdGVseSB0aGF0CiMgcmVxdWlyZXMgcGFzc3dvcmQgYXV0aGVudGljYXRpb24gb3ZlciBzc2guICBjbG91ZC1pbml0IHNzaF9wd2F1dGggY29udHJvbHMKIyB0aGF0IHNldHRpbmcuICBBbnl0aGluZyB5b3UgZG8gdG8gc3NoZF9jb25maWcgaGVyZSB3aWxsIGJlIG92ZXJ3cml0dGVuIGJ5CiMgY2xvdWQtaW5pdC4KCmdyb3VwYWRkIC1nIDE1MDAgYWRtaW4KdXNlcmFkZCAtZyAxNTAwIC11IDE1MDAgYWRtaW4Kc2VkIC1pIC1lICdzJV5hZG1pbjpbXjpdKjpcKC4qXCklYWRtaW46JDEkcUx6enZRZjYkWHVrMjhmMUFQbEYzVS8xWXVTTllTMDpcMSUnIC9ldGMvc2hhZG93CmVjaG8gJ2FkbWluIEFMTD0oQUxMKSBOT1BBU1NXRDogQUxMJyA+IC9ldGMvc3Vkb2Vycy5kL2FkbWluCgpta3N3YXAgL2Rldi94dmRiCmVjaG8gJy9kZXYveHZkYiBzd2FwIHN3YXAgZGVmYXVsdHMgMCAwJyA+PiAvZXRjL2ZzdGFiCgojIFByZXZlbnQgZXh0cmEgcmVwb3NpdG9yaWVzIGJlaW5nIHVzZWQgYnkgbWlzdGFrZQoKeXVtLWNvbmZpZy1tYW5hZ2VyIC0tZGlzYWJsZSBlcGVsCnl1bS1jb25maWctbWFuYWdlciAtLWRpc2FibGUgcmh1aS1SRUdJT04tcmhlbC1zZXJ2ZXItb3B0aW9uYWwKCnl1bSB1cGRhdGUgLXkKCiMgTW92aW5nIHRoZSBBTUkgZnJvbSBvbmUgcmVnaW9uIHRvIGFub3RoZXIgcGlja3MgdXAgZGlmZmVyZW50IFJlZEhhdAojIHJlcG9zaXRvcmllcyB3aGljaCBjYW4gaGF2ZSBkaWZmZXJlbnQgY29udGVudHMuICBOb3Qgc3VyZSB3aHkgdGhpcyBoYXBwZW5zLAojIGJ1dCBpdCBoYXMgaGFwcGVuZWQgYXQgbGVhc3Qgb25jZSwgZ2l2aW5nICdOb3QgdXNpbmcgZG93bmxvYWRlZCByZXBvbWQueG1sCiMgYmVjYXVzZSBpdCBpcyBvbGRlciB0aGFuIHdoYXQgd2UgaGF2ZScgYW5kIGJyZWFraW5nIHRoZSBuZXcgaW5zdGFuY2UuICBDbGVhbgojIG91dCB5dW0gYmVmb3JlIHNodXRkb3duLgoKeXVtIGNsZWFuIGFsbAoKIyBJbnN0YWxsIHRoZSBmaWxlcyBhbmQgcGFja2FnZXMgZnJvbSB0aGUgbWV0YWRhdGEKL29wdC9hd3MvYmluL2Nmbi1pbml0IC12IC0tc3RhY2sgYXAtc291dGhlYXN0LTItcmhlbDctZ29sZGVuLWltYWdlIC0tcmVzb3VyY2UgcmhlbDdnb2xkZW4gLS1yZWdpb24gYXAtc291dGhlYXN0LTIKIyBTaWduYWwgdGhlIHN0YXR1cyBmcm9tIGNmbi1pbml0Ci9vcHQvYXdzL2Jpbi9jZm4tc2lnbmFsIC1lICQ/IC0tc3RhY2sgYXAtc291dGhlYXN0LTItcmhlbDctZ29sZGVuLWltYWdlIC0tcmVzb3VyY2UgcmhlbDdnb2xkZW4gLS1yZWdpb24gYXAtc291dGhlYXN0LTIKCi0tPT09PT09PT09PT09PT09cmhlbDdnb2xkZW49PS0tCg=="
+      }
+    }
+  },
+  "Outputs" : {
+    "rhel7goldenInstanceId" : {
+      "Description" : "Instance Id for latest RHEL7 golden image",
+      "Value" : { "Ref": "rhel7golden" }
+    }
+  }
+}

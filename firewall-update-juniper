@@ -1,0 +1,64 @@
+#!/usr/bin/expect -f
+
+# Connect to a Juniper firewall with the supplied user and password.  Send each
+# command from the defined file, waiting for the firewall to respond before
+# sending the next line.  This avoids buffer overrun problems that can occur if
+# you send the entire set of commands without waiting for a response.
+#
+# Parameters:
+#   user@IP or user@hostname.
+#   Password
+#   File containing commands.
+
+set timeout 20
+
+set username [lindex $argv 0];
+set password [lindex $argv 1];
+set commands [lindex $argv 2];
+
+set f [open "$commands"]
+set commands [split [read $f] "\n"]
+close $f
+
+set timeout 60
+spawn ssh -o CheckHostIP=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ControlMaster=no $username
+expect_after {
+	timeout {
+		send_error "Error: timeout\n"
+		close
+		wait
+		return 1
+	}
+	eof {
+		send_error "Error: premature eof\n"
+		wait
+		return 1
+	}
+}
+expect "Password:"
+set timeout 20
+send_user "**********\n"
+send "$password\r"
+expect "@srx-b> "
+send "configure\r"
+expect "@srx-b# "
+
+foreach cmd $commands {
+	# Comments look like prompts so strip them.  Also strip blank lines.
+	regsub #.* $cmd "" cmd
+	if { [regexp . $cmd] } {
+		send "$cmd\r"
+		expect "@srx-b# "
+	}
+}
+
+# commit commands can take a while
+set timeout 300
+send "commit\r"
+expect "@srx-b# "
+send "commit\r"
+expect "@srx-b# "
+send "exit\r"
+expect "@srx-b> "
+send "exit\r"
+expect eof

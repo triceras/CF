@@ -1,0 +1,31 @@
+#!/bin/bash
+
+set -e
+set -o pipefail
+
+resource="${1:?"Missing resource name"}"
+
+cat << EODATA
+        "UserData" : {
+          "Fn::Base64" : { "Fn::Join" : ["", [
+            "#!/bin/bash -x\n",
+            "yum update -y\n",
+
+            "# Install the files and packages from the metadata\n",
+            "/opt/aws/bin/cfn-init -v ",
+                    " --stack ", { "Ref" : "AWS::StackName" },
+                    " --resource $resource",
+                    " --region ", { "Ref" : "AWS::Region" },
+                    "\n",
+
+	    "# Signal the status from cfn-init\n",
+	    "/opt/aws/bin/cfn-signal -e $? ",
+	            " --stack ", { "Ref" : "AWS::StackName" },
+	            " --resource $resource",
+	            " --region ", { "Ref" : "AWS::Region" },
+		    "\n"
+
+	    ]]
+          }
+        },
+EODATA

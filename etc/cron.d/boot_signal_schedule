@@ -1,0 +1,10 @@
+MAILTO = alerts@whispir.com
+
+# Send a dummy boot signal every 8 hours.  Just to pick up any hosts that have
+# been shut down and nothing has booted since then.
+
+# Some systems do not have sbin on the path :-(
+
+PATH=/sbin:/bin:/usr/sbin:/usr/bin
+
+00 */8 * * * root service boot_signal restart > /dev/null 2>&1

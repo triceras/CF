@@ -1,0 +1,101 @@
+#!/bin/bash
+
+# Generate the commands to update a firewall to add routing to a spoke over IPIP.
+# vpn-generate-firewall created the IPIP tunnels at the same time that it
+# created the VPN, it also marked the IPIP tunnels as trusted.  All this code
+# has to do is to add the routingto the spoke account over the IPIP tunnel.
+#
+# Common parameters are:
+#   Firewall type.
+#   Account name.
+#   Region.
+#   VPC stack name.
+#   Suffix for generated filenames.
+#   Hub account name.
+
+# Various bits of the firewall configuration require unique codes which have to
+# be numbers, they cannot be names.  Normally these unique codes have small
+# sequential values (< 1000) but trying to fit automatically generated commands
+# in with that sequence causes problems.  This script would have to log into
+# each firewall in order to get the current sequences in use before it could
+# generate the firewall commands, that requires gard coded user names and
+# passwords.  Even worse, the chosen values could be used between the time that
+# the numbers were chosen and the time that the commands were run.
+#
+# To avoid this problem, use large numbers for the unique codes, so large that
+# normal GUI based processing will not use these values.  Each unique code
+# starts at ${network_base}${t}0.  For example, network base 34, tunnel 2
+# starts at 3420.
+
+# Tunnel numbers start at 1, not 0 to match the AWS numbering.
+
+set -e
+set -o pipefail
+
+firewall_type=${1:?"Missing firewall type"}
+account_name=${2:?"Missing account name"}
+region=${3:?"Missing region name"}
+filename_suffix=${4:?"Missing filename suffix"}
+vpc_stack_name=${5:?"Missing VPC stack name"}
+hub_account_name=${6:?"Missing hub account name"}
+shift 6
+
+NO_JSON_FILE=1 source ./functions
+
+if [[ "$firewall_type" != Fortigate && "$firewall_type" != Juniper ]]
+then
+	echo "This script only handles Fortigate and Juniper firewalls, not $firewall_type"
+	exit 1
+fi
+
+: ${FIREWALL_FILE=generated/${account_name:?}/firewall-add-$filename_suffix}
+: ${FIREWALL_FILE_DELETE=generated/${account_name:?}/firewall-delete-$filename_suffix}
+
+eval $(stack_outputs $vpc_stack_name)
+
+network_base="${VPCNetworkBase:?"Missing network base"}"
+vpn_prefix=aws-${hub_account_name#whispir-}
+
+: ${TUNNELS=2}
+
+echo Firewall commands "$FIREWALL_FILE"
+
+: > "$FIREWALL_FILE"
+
+cat >> "$FIREWALL_FILE" << EODATA
+# Account: $(./map-account-name $VPCAccountId)
+# Region: $region
+# Firewall type: $firewall_type
+# VPC stack: $vpc_stack_name
+# Network base: $network_base
+
+EODATA
+
+# Most firewall commands are singular.  That is, you do not have to worry what
+# the previous setting is, you can just overwrite it.  But some commands are
+# additive, so you have to remove any existing settings for those commands
+# before adding the new settings.  Hence the delete statements below.
+
+if [[ $firewall_type = Juniper ]]
+then
+	echo "No code for Juniper yet" >&2
+elif [[ $firewall_type = Fortigate ]]
+then
+	for t in $(seq $TUNNELS)
+	do
+		unique_code=${network_base}${t}0
+		cat >> "$FIREWALL_FILE" << EODATA
+config router static
+    edit $unique_code
+        set device "${vpn_prefix:?}-ipip-${t}"
+        set dst 10.${network_base}.0.0 255.255.0.0
+        set priority 0
+end
+EODATA
+	done
+else
+	echo "What to do?  Should never happen"
+	exit 1
+fi
+
+./vpn-delete-firewall "$FIREWALL_FILE" > "$FIREWALL_FILE_DELETE"

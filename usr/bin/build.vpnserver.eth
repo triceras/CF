@@ -1,0 +1,43 @@
+#!/bin/bash
+
+# Use the data in /etc/sysconfig/network-scripts/ETHData to build the
+# ifcfg-eth* files.  See CF script create-vpn-server-instance.
+
+set -e
+
+source /etc/sysconfig/network-scripts/ETHData
+
+for eth in ${eth_interfaces[*]}
+do
+	# Standard boot defines ifcfg-eth0, leave it alone.
+	if [[ ${eth:?} == eth0 ]]
+	then
+		continue
+	fi
+	ifdown ${eth} > /dev/null 2>&1 || true
+
+	file=/etc/sysconfig/network-scripts/ifcfg-${eth}
+
+	cat > ${file:?} << EODATA
+DEVICE="${eth}"
+BOOTPROTO="none"
+ONBOOT="yes"
+TYPE="Ethernet"
+USERCTL="yes"
+PEERDNS="no"
+IPV6INIT="no"
+MTU="1500"
+NOZEROCONF="yes"
+NM_CONTROLLED="no"
+
+EODATA
+
+	eval eth_ips=(\${${eth}_ips[*]})
+	for i in $(seq ${#eth_ips[*]})
+	do
+		ip=${eth_ips[$(($i-1))]}
+		echo -e "IPADDR$i=\"${ip:?}\"\nPREFIX$i=19\nARPCHECK$i=\"no\"\n" >> ${file:?}
+	done
+
+	ifup ${eth}
+done

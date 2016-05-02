@@ -1,0 +1,334 @@
+#!/bin/bash
+
+# Create or update a VPC in a defined region.
+#
+# The calling environment must contain the required credentials for the target
+# account.
+#
+# Parameters are:
+#   Region.
+#   Network base (VPC is 10.$network_base.0.0/16).
+#   List of zone suffices.  Some regions have non-contiguous zone suffices, so
+#   the caller needs to supply the list.  us-east-1 has A B C E.
+
+set -e
+set -o pipefail
+
+region=${1:?"Missing region name"}
+network_base=${2:?"Missing network base"}
+shift 2
+
+# zone_Suffices are assumed to be in upper case.
+
+zone_Suffices=($*)
+
+source ./functions
+
+: ${VPCDomain=${region:?}.${var_account_suffix:?}.internal}
+
+# The JSON file to create this VPC and its networking infrastructure is built
+# up in sections.  Some sections are fixed and, by definition, only occur once.
+# Some sections occur once but contain variable data.  Some sections occur a
+# variable number of times and, by definition, have variable contents.  Fixed
+# sections use << 'EODATA' so you do not need to worry about escape and $
+# inside those sections.  Variable sections use << EODATA so watch out for
+# escape and $ characters.
+
+json_fragment << 'EODATA'
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "Define our VPC with public and private subnets",
+
+  "Resources" : {
+
+    "VPC" : {
+      "Type" : "AWS::EC2::VPC",
+      "Properties" : {
+        "EnableDnsSupport" : true,
+        "EnableDnsHostnames" : false,
+EODATA
+
+json_fragment << EODATA
+        "CidrBlock" : "$(cidr 0 16)",
+EODATA
+
+json_fragment << 'EODATA'
+        "Tags" : [
+          { "Key" : "Name", "Value" : { "Ref" : "AWS::StackName" } }
+        ]
+      }
+    },
+
+    "InternetGateway" : {
+      "Type" : "AWS::EC2::InternetGateway",
+      "Properties" : {
+        "Tags" : [
+          { "Key" : "Name", "Value" : { "Ref" : "AWS::StackName" } }
+        ]
+      }
+    },
+
+    "GatewayToInternet" : {
+      "DependsOn" : ["VPC", "InternetGateway"],
+      "Type" : "AWS::EC2::VPCGatewayAttachment",
+      "Properties" : {
+        "VpcId" : { "Ref" : "VPC" },
+        "InternetGatewayId" : { "Ref" : "InternetGateway" }
+      }
+    },
+
+    "VPNGateway" : {
+      "Type" : "AWS::EC2::VPNGateway",
+      "Properties" : {
+        "Type" : "ipsec.1"
+      }
+    },
+
+    "VPNGatewayAttachment" : {
+      "DependsOn" : ["VPNGateway"],
+      "Type" : "AWS::EC2::VPCGatewayAttachment",
+      "Properties" : {
+        "VpcId" : { "Ref" : "VPC" },
+        "VpnGatewayId" : {"Ref" : "VPNGateway" }
+      }
+    },
+EODATA
+
+# DNS settings for all hosts, including name servers.  See
+# http://intra:8080/display/Whispir/AWS+Internal+Host+Names%2C+Domains+and+DNS+Details
+#
+# 1) Use localhost - served by caching name server (dnsmasq).
+# 2) If localhost is not working, use the VPC name servers (util1/2).
+# 3) If all else fails, use the Amazon name servers.
+
+json_fragment << EODATA
+    "DHCPOptions" : {
+      "Type" : "AWS::EC2::DHCPOptions",
+      "Properties" : {
+        "DomainName" : "${VPCDomain:?}",
+        "DomainNameServers" : [ "$(util1), $(util2), AmazonProvidedDNS" ],
+        "Tags" : [
+          { "Key" : "Name", "Value" : { "Ref" : "AWS::StackName" } }
+        ]
+      }
+    },
+    "VPCDHCPOptionsAssociation" : {
+      "Type" : "AWS::EC2::VPCDHCPOptionsAssociation",
+      "Properties" : {
+	"DhcpOptionsId" : { "Ref" : "DHCPOptions" },
+	"VpcId" : { "Ref" : "VPC" }
+      }
+    },
+EODATA
+
+# Each zone gets a public and private subnet.
+#
+# Instances in a public subnet get external IPs.
+# Instances in a private subnet do not get external IPs.
+# Public instances route via the internet gateway.
+# Each public subnet has its own routing table.  RFC1918 traffic goes via the
+# local NAT box (see create-nat script), public traffic goes via the IGW.
+#
+# Each public subnet gets a NAT instance (see create-nat script).
+#
+# Private instances route via the local NAT box for external access.
+# Each private subnet has a separate routing table, via the local NAT box.
+# The NAT boxes can be used as a last ditch jump box to ssh to a private host.
+# Routing for NAT boxes is done in the create-nat script.
+
+base=0
+subnets=''
+routetables=''
+
+for zone_Suffix in ${zone_Suffices[@]}
+do
+	suffix=${zone_Suffix,}
+	subnets="$subnets PublicSubnet$zone_Suffix PrivateSubnet$zone_Suffix"
+	routetables="$routetables PublicRouteTable$zone_Suffix PrivateRouteTable$zone_Suffix"
+	json_fragment << EODATA
+    "PublicSubnet$zone_Suffix" : {
+      "DependsOn" : ["VPC"],
+      "Type" : "AWS::EC2::Subnet",
+      "Properties" : {
+        "VpcId" : { "Ref" : "VPC" },
+        "AvailabilityZone": "$region$suffix",
+        "MapPublicIpOnLaunch": true,
+        "CidrBlock" : "$(cidr $base 19)",
+        "Tags" : [
+          { "Key" : "Name", "Value" : "Public $zone_Suffix" }
+        ]
+      }
+    },
+
+    "PublicRouteTable$zone_Suffix" : {
+      "DependsOn" : ["VPC"],
+      "Type" : "AWS::EC2::RouteTable",
+      "Properties" : {
+        "VpcId" : { "Ref" : "VPC" },
+        "Tags" : [
+          { "Key" : "Name", "Value" : "Public $zone_Suffix" }
+        ]
+      }
+    },
+
+    "PublicSubnetRouteTableAssociation$zone_Suffix" : {
+      "DependsOn" : ["PublicSubnet$zone_Suffix", "PublicRouteTable$zone_Suffix"],
+      "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties" : {
+        "SubnetId" : { "Ref" : "PublicSubnet$zone_Suffix" },
+        "RouteTableId" : { "Ref" : "PublicRouteTable$zone_Suffix" }
+      }
+    },
+
+    "PublicRoute$zone_Suffix" : {
+      "DependsOn" : ["PublicSubnetRouteTableAssociation$zone_Suffix", "InternetGateway"],
+      "Type" : "AWS::EC2::Route",
+      "Properties" : {
+        "RouteTableId" : { "Ref" : "PublicRouteTable$zone_Suffix" },
+        "DestinationCidrBlock" : "0.0.0.0/0",
+        "GatewayId" : { "Ref" : "InternetGateway" }
+      }
+    },
+
+    "PrivateRouteTable$zone_Suffix" : {
+      "DependsOn" : ["VPC"],
+      "Type" : "AWS::EC2::RouteTable",
+      "Properties" : {
+        "VpcId" : { "Ref" : "VPC" },
+        "Tags" : [
+          { "Key" : "Name", "Value" : "Private $zone_Suffix" }
+        ]
+      }
+    },
+
+    "PrivateSubnet$zone_Suffix" : {
+      "DependsOn" : ["VPC"],
+      "Type" : "AWS::EC2::Subnet",
+      "Properties" : {
+        "VpcId" : { "Ref" : "VPC" },
+        "AvailabilityZone": "$region$suffix",
+        "MapPublicIpOnLaunch": false,
+        "CidrBlock" : "$(cidr $base+32 19)",
+        "Tags" : [
+          { "Key" : "Name", "Value" : "Private $zone_Suffix" }
+        ]
+      }
+    },
+
+    "PrivateSubnetRouteTableAssociation$zone_Suffix" : {
+      "DependsOn" : ["PrivateSubnet$zone_Suffix", "PrivateRouteTable$zone_Suffix"],
+      "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties" : {
+        "SubnetId" : { "Ref" : "PrivateSubnet$zone_Suffix" },
+        "RouteTableId" : { "Ref" : "PrivateRouteTable$zone_Suffix" }
+      }
+    },
+
+EODATA
+
+	# Step to the next availability zone
+	base=$(($base+64))
+done
+
+SubnetIds=''
+for r in $subnets
+do
+	ref='{ "Ref" : "'$r'" }'
+	if [ -z "$SubnetIds" ]
+	then
+		SubnetIds="$ref"
+	else
+		SubnetIds="$SubnetIds, $ref"
+	fi
+done
+
+RouteTableIds=''
+for r in $routetables
+do
+	ref='{ "Ref" : "'$r'" }'
+	if [ -z "$RouteTableIds" ]
+	then
+		RouteTableIds="$ref"
+	else
+		RouteTableIds="$RouteTableIds, $ref"
+	fi
+done
+
+json_fragment << EODATA
+
+    "VPNGatewayRoutePropagation" : {
+      "Type" : "AWS::EC2::VPNGatewayRoutePropagation",
+      "DependsOn" : ["VPNGatewayAttachment"],
+      "Properties" : {
+	"RouteTableIds" : [ $RouteTableIds ],
+        "VpnGatewayId" : {"Ref" : "VPNGateway" }
+      }
+    }
+
+  },
+
+  "Outputs" : {
+    "VPCID" : {
+      "Description" : "VPC ID",
+      "Value" : { "Ref" : "VPC" }
+    },
+    "VPCVPNGatewayId" : {
+      "Value" : { "Ref" : "VPNGateway" }
+    },
+    "VPCRegion" : {
+      "Description" : "The region for this VPC",
+      "Value" : { "Ref" : "AWS::Region" }
+    },
+    "VPCAccountId" : {
+      "Description" : "The account id for this VPC",
+      "Value" : "${account_number:?}"
+    },
+    "VPCAccountName" : {
+      "Description" : "The account name for this VPC",
+      "Value" : "${account_name:?}"
+    },
+    "VPCNetworkBase" : {
+      "Description" : "The network base value for this VPC",
+      "Value" : "$network_base"
+    },
+    "VPCZones" : {
+      "Description" : "The zones that this VPC is defined in",
+      "Value" : "${zone_Suffices[@]}"
+    },
+    "VPCDomain" : {
+      "Description" : "Domain for this account",
+      "Value" : "${VPCDomain:?}"
+    },
+EODATA
+
+for zone_Suffix in ${zone_Suffices[@]}
+do
+	json_fragment << EODATA
+    "VPCPublicSubnet$zone_Suffix" : {
+      "Description" : "Public subnet $zone_Suffix",
+      "Value" : { "Ref" : "PublicSubnet$zone_Suffix" }
+    },
+    "VPCPrivateSubnet$zone_Suffix" : {
+      "Description" : "Private subnet $zone_Suffix",
+      "Value" : { "Ref" : "PrivateSubnet$zone_Suffix" }
+    },
+    "VPCPublicRouteTable$zone_Suffix" : {
+      "Description" : "Public route table $zone_Suffix",
+      "Value" : { "Ref" : "PublicRouteTable$zone_Suffix" }
+    },
+    "VPCPrivateRouteTable$zone_Suffix" : {
+      "Description" : "Private route table $zone_Suffix",
+      "Value" : { "Ref" : "PrivateRouteTable$zone_Suffix" }
+    },
+EODATA
+done
+
+json_fragment << 'EODATA'
+
+  }
+
+}
+EODATA
+
+build_stack

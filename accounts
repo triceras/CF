@@ -1,0 +1,8 @@
+||Account number||Account name||Root email||Network base||Notes||Region||Availability zones||Install applications||Hub account||External VPN IPs||
+|072071511304|whispir-billing|aws-billing@whispir.com| |No users. Gets all billing for other accounts. Email is sent to the root email and accounts@whispir.com.| | |0| |0|
+|283928602837|whispir-users|aws-users@whispir.com|35|Users and corporate instances. Everybody logs in on this account and assumes roles to do cross account work|ap-southeast-2|A B|0|whispir-au1|0|
+|537355466014|whispir-sg1|aws-sg1@whispir.com|33|Singapore account 1|ap-southeast-1|A B|1| |0|
+|885558685549|whispir-sg1-dev|aws-sg1-dev@whispir.com|36|Singapore account 1 dev|ap-southeast-1|A B|1|whispir-sg1|0|
+|943151401916|whispir-au1|aws-au1@whispir.com|32|Australia account 1|ap-southeast-2|A B|1| |0|
+|997185285782|whispir|admin@whispir.com|45|Existing account| | |0| |0|
+|998716674854|whispir-us|aws-us@whispir.com|34|US account 1|us-west-1|A C|1| |0|

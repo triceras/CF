@@ -1,0 +1,5 @@
+#!/bin/bash
+
+# Return all the whispir AWS account names.
+
+echo $(awk -F'|' '/^\|\|/{next}{print $3}' < accounts)

@@ -1,0 +1,100 @@
+#!/bin/bash
+
+# Create or update a VPN in a defined region and VPC.
+#
+# The calling environment must contain the required credentials for the target
+# account.
+#
+# Parameters are:
+#   Region.
+#   My stack name.
+#   VPC stack name.
+#   Human readable name for the remote site.
+#   Customer gateway IP (IP on our Fortigate)
+#   One or more static routes for this VPN.
+
+set -e
+set -o pipefail
+
+region=${1:?"Missing region name"}
+STACK_NAME=${2:?"Missing stack name"}
+vpc_stack_name=${3:?"Missing VPC stack name"}
+remote_site=${4:?"Missing remote site"}
+customer_gateway=${5:?"Missing customer gateway"}
+shift 5
+static_routes="$@"
+
+source ./functions
+
+eval $(stack_outputs $vpc_stack_name)
+
+json_fragment << 'EODATA'
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "Add a VPN to an existing VPC/VGW",
+EODATA
+
+json_fragment << EODATA
+
+  "Resources" : {
+
+    "CustomerGateway" : {
+      "Type" : "AWS::EC2::CustomerGateway",
+      "Properties" : {
+        "Type" : "ipsec.1",
+        "BgpAsn" : "$((65000+$VPCNetworkBase))",
+        "IpAddress" : "$customer_gateway",
+        "Tags" : [
+          { "Key" : "Name", "Value" : "Gateway to $remote_site"}
+        ]
+      }
+    },
+
+    "VPNConnection" : {
+      "DependsOn" : ["CustomerGateway"],
+      "Type" : "AWS::EC2::VPNConnection",
+      "Properties" : {
+        "Type" : "ipsec.1",
+        "StaticRoutesOnly" : "true",
+        "CustomerGatewayId" : { "Ref" : "CustomerGateway" },
+        "VpnGatewayId" : "$VPCVPNGatewayId",
+        "Tags" : [{ "Key" : "Name", "Value" : "$stack_name" }]
+      }
+    },
+EODATA
+
+for s in $static_routes
+do
+	json_fragment << EODATA
+
+    "VPNConnectionRoute$(route_label $s)" : {
+      "DependsOn" : ["VPNConnection"],
+      "Type" : "AWS::EC2::VPNConnectionRoute",
+      "Properties" : {
+        "VpnConnectionId" : { "Ref" : "VPNConnection" },
+        "DestinationCidrBlock" : "$s"
+      }
+    },
+EODATA
+done
+
+json_fragment << EODATA
+
+  },
+
+  "Outputs" : {
+    "VPNCustomerGatewayId" : {
+      "Description" : "CustomerGateway Id",
+      "Value" : { "Ref" : "CustomerGateway" }
+    },
+    "VPNConnectionId" : {
+      "Description" : "VPNConnection Id",
+      "Value" : { "Ref" : "VPNConnection" }
+    }
+  }
+
+}
+EODATA
+
+build_stack

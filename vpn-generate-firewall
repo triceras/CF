@@ -1,0 +1,393 @@
+#!/bin/bash
+
+# Generate the commands to update a firewall to add a vpn.
+#
+# The calling environment must contain the required credentials for the target
+# account.
+#
+# Common parameters are:
+#   Firewall type.
+#   Firewall interface to use for the VPN.
+#   Account name.
+#   Region.
+#   VPN stack name.
+#   VPC stack name.
+#   Local outside endpoint for IPIP tunnels.
+# After the common parameters are any firewall specific parameters.
+#   Fortigate:
+#     List of ports to have access to AWS VPNs.  One parameter containing space separated port names.
+#     Flag for old firmware.  If set to 1 then tweak the generated file to match firmware 4
+
+# Various bits of the firewall configuration require unique codes which have to
+# be numbers, they cannot be names.  Normally these unique codes have small
+# sequential values (< 1000) but trying to fit automatically generated commands
+# in with that sequence causes problems.  This script would have to log into
+# each firewall in order to get the current sequences in use before it could
+# generate the firewall commands, that requires gard coded user names and
+# passwords.  Even worse, the chosen values could be used between the time that
+# the numbers were chosen and the time that the commands were run.
+#
+# To avoid this problem, use large numbers for the unique codes, so large that
+# normal GUI based processing will not use these values.  Each unique code
+# starts at ${network_base}${t}0.  For example, network base 34, tunnel 2
+# starts at 3420.
+
+# Tunnel numbers start at 1, not 0 to match the AWS numbering.
+
+set -e
+set -o pipefail
+
+NO_JSON_FILE=1 source ./functions
+
+firewall_type=${1:?"Missing firewall type"}
+firewall_interface=${2:?"Missing firewall interface"}
+account_name=${3:?"Missing account name"}
+region=${4:?"Missing region name"}
+vpn_stack_name=${5:?"Missing VPN stack name"}
+vpc_stack_name=${6:?"Missing VPC stack name"}
+ipip_outside_address=${7:?"Missing IPIP outside address"}
+
+if [[ "$firewall_type" != Fortigate && "$firewall_type" != Juniper ]]
+then
+	echo "This script only handles Fortigate and Juniper firewalls, not $firewall_type"
+	exit 1
+fi
+
+: ${FIREWALL_FILE=generated/${account_name:?}/firewall-add-$vpn_stack_name}
+: ${FIREWALL_FILE_DELETE=generated/${account_name:?}/firewall-delete-$vpn_stack_name}
+: ${TMP_FIREWALL_FILE=/tmp/firewall-add-$vpn_stack_name}
+: ${TMP_FIREWALL_FILE_DELETE=/tmp/firewall-delete-$vpn_stack_name}
+
+# Take all the outputs from the input stacks and put them into my environment.
+
+get_vpc_data ${vpc_stack_name:?}
+eval $(stack_outputs $vpn_stack_name)
+
+network_base="${VPCNetworkBase:?"Missing network base"}"
+account_name=$(./map-account-name $VPCAccountId)
+vpn_prefix=aws-$(account_suffix)
+customer_gateway_id="${VPNCustomerGatewayId:?"Missing customer gateway id"}"
+customer_gateway_ip="$(aws ec2 describe-customer-gateways --region $region --filters Name=customer-gateway-id,Values=$customer_gateway_id --query='CustomerGateways[*].IpAddress' --output text)"
+customer_gateway_ip="${customer_gateway_ip:?"Missing customer gateway ip"}"
+
+: ${TUNNELS=2}
+
+echo Firewall commands "$TMP_FIREWALL_FILE"
+
+: > "$TMP_FIREWALL_FILE"
+
+cat >> "$TMP_FIREWALL_FILE" << EODATA
+# Account: $(./map-account-name $VPCAccountId)
+# Region: $region
+# Firewall type: $firewall_type
+# Firewall interface: $firewall_interface
+# VPC stack: $vpc_stack_name
+# VPC id: $VPCID
+# VPN stack: $vpn_stack_name
+# VPN Connection Id: $VPNConnectionId
+# Customer gateway ip: $customer_gateway_ip
+# Network base: $network_base
+
+EODATA
+
+# Dump all the information for the VPNConnection in XML, followed by some quick
+# and dirty Perl to decode the XML and extract the variables that we want.  The
+# resulting variables are put into my shell environment by eval().
+
+cat > /tmp/vpn-generate-firewall-$$.pl << 'EODATA'
+use strict;
+use warnings;
+use XML::Simple;
+undef $/;
+my $xml = XMLin(<>);
+my $ipsec_tunnel = $xml->{'ipsec_tunnel'};
+for (my $i = 0, my $t = 1; defined($ipsec_tunnel->[$i]); ++$i, ++$t) {
+	my $tunnel = $ipsec_tunnel->[$i];
+	my $aws_inside = $tunnel->{'vpn_gateway'}->{'tunnel_inside_address'}->{'ip_address'};
+	my $aws_outside = $tunnel->{'vpn_gateway'}->{'tunnel_outside_address'}->{'ip_address'};
+	my $firewall_inside = $tunnel->{'customer_gateway'}->{'tunnel_inside_address'}->{'ip_address'};
+	my $firewall_cidr = $tunnel->{'customer_gateway'}->{'tunnel_inside_address'}->{'network_cidr'};
+	my $firewall_outside = $tunnel->{'customer_gateway'}->{'tunnel_outside_address'}->{'ip_address'};
+	my $psk = $tunnel->{'ike'}->{'pre_shared_key'};
+	printf("aws_inside[%d]=%s\n", $t, $aws_inside);
+	printf("aws_outside[%d]=%s\n", $t, $aws_outside);
+	printf("firewall_inside[%d]=%s\n", $t, $firewall_inside);
+	printf("firewall_outside[%d]=%s\n", $t, $firewall_outside);
+	printf("firewall_network[%d]=%s/%s\n", $t, $firewall_inside, $firewall_cidr);
+	printf("psk[%d]=%s\n", $t, $psk);
+}
+EODATA
+
+eval $(aws ec2 describe-vpn-connections --region $region --filters Name=vpn-connection-id,Values=$VPNConnectionId --query='VpnConnections[*].CustomerGatewayConfiguration' --output text |
+	perl /tmp/vpn-generate-firewall-$$.pl)
+rm /tmp/vpn-generate-firewall-$$.pl
+
+# Most firewall commands are singular.  That is, you do not have to worry what
+# the previous setting is, you can just overwrite it.  But some commands are
+# additive, so you have to remove any existing settings for those commands
+# before adding the new settings.  Hence the delete statements below.
+
+if [[ $firewall_type = Juniper ]]
+then
+	cat >> "$TMP_FIREWALL_FILE" << 'EODATA'
+# Global definitions, used by all AWS VPNs
+
+set security ike proposal aws-vpn authentication-algorithm sha1
+set security ike proposal aws-vpn authentication-method pre-shared-keys
+set security ike proposal aws-vpn dh-group group2
+set security ike proposal aws-vpn encryption-algorithm aes-128-cbc
+set security ike proposal aws-vpn lifetime-seconds 28800
+set security ipsec policy aws-vpn perfect-forward-secrecy keys group2
+set security ipsec policy aws-vpn proposals aws-vpn
+set security ipsec proposal aws-vpn authentication-algorithm hmac-sha1-96
+set security ipsec proposal aws-vpn encryption-algorithm aes-128-cbc
+set security ipsec proposal aws-vpn lifetime-seconds 3600
+set security ipsec proposal aws-vpn protocol esp
+
+# Per tunnel definitions
+EODATA
+
+	base=0
+	for t in $(seq $TUNNELS)
+	do
+		unique_code=${network_base}${t}0
+		cat >> "$TMP_FIREWALL_FILE" << EODATA
+
+set security ike policy ike-pol-$vpn_prefix-$t mode main
+set security ike policy ike-pol-$vpn_prefix-$t pre-shared-key ascii-text ${psk[$t]}
+set security ike policy ike-pol-$vpn_prefix-$t proposals aws-vpn
+delete security ike gateway gw-$vpn_prefix-$t
+set security ike gateway gw-$vpn_prefix-$t address ${aws_outside[$t]}
+set security ike gateway gw-$vpn_prefix-$t dead-peer-detection
+set security ike gateway gw-$vpn_prefix-$t external-interface $firewall_interface
+set security ike gateway gw-$vpn_prefix-$t ike-policy ike-pol-$vpn_prefix-$t
+set security ipsec vpn $vpn_prefix-$t bind-interface st0.$unique_code
+set security ipsec vpn $vpn_prefix-$t df-bit clear
+set security ipsec vpn $vpn_prefix-$t ike gateway gw-$vpn_prefix-$t
+set security ipsec vpn $vpn_prefix-$t ike ipsec-policy aws-vpn
+set security ipsec vpn $vpn_prefix-$t vpn-monitor destination-ip ${aws_inside[$t]}
+set security ipsec vpn $vpn_prefix-$t vpn-monitor source-interface st0.$unique_code
+delete interfaces st0.$unique_code
+set interfaces st0.$unique_code family inet address ${firewall_network[$t]}
+set interfaces st0.$unique_code family inet mtu 1436
+
+set routing-options static route 10.$network_base.0.0/16 next-hop st0.$unique_code
+
+set security zones security-zone Trusted interfaces st0.$unique_code
+EODATA
+	base=$(($base+64))
+	done
+elif [[ $firewall_type = Fortigate ]]
+then
+
+	ports="${8:?"Missing port list for Fortigate"}"
+	old_firmware="${9:?"Missing old firmware flag for Fortigate"}"
+
+	# Difference between for old and new firmware.
+
+	if [[ "$old_firmware" -eq 1 ]]
+	then
+		system_tunnel=gre-tunnel
+		mtu_override=0
+	else
+		system_tunnel=ipip-tunnel
+		mtu_override=1
+	fi
+
+		cat >> "$TMP_FIREWALL_FILE" << EODATA
+config firewall address
+    edit "AWS_NET"
+        set comment "Addresses assigned to AWS accounts"
+        set subnet 10.32.0.0 255.240.0.0
+end
+EODATA
+
+	base=0
+	for t in $(seq $TUNNELS)
+	do
+		unique_code=${network_base}${t}0
+		cat >> "$TMP_FIREWALL_FILE" << EODATA
+config vpn ipsec phase1-interface
+    edit "$vpn_prefix-$t"
+        set interface "$firewall_interface"
+        set local-gw ${firewall_outside[$t]}
+        set dhgrp 2
+        set proposal aes128-sha1
+        set remote-gw ${aws_outside[$t]}
+        set psksecret ${psk[$t]}
+        set dpd-retryinterval 10
+end
+config vpn ipsec phase2-interface
+    edit "$vpn_prefix-$t-p2"
+        set phase1name "$vpn_prefix-$t"
+        set proposal aes128-sha1
+        set dhgrp 2
+        set keylifeseconds 3600
+end
+config system $system_tunnel
+    edit "$vpn_prefix-ipip-$t"
+        set interface "$vpn_prefix-$t"
+        set local-gw ${ipip_outside_address:?}
+        set remote-gw 10.$network_base.$base.10
+end
+config system interface
+    edit "$vpn_prefix-ipip-$t"
+        set allowaccess ping
+        set snmp-index $(($unique_code+1))
+EODATA
+
+		if [ $mtu_override -eq 1 ]
+		then
+			cat >> "$TMP_FIREWALL_FILE" << EODATA
+        set mtu-override enable
+EODATA
+		fi
+
+		cat >> "$TMP_FIREWALL_FILE" << EODATA
+        set mtu 1300
+end
+config firewall policy
+    edit $unique_code
+        set srcintf "$vpn_prefix-$t"
+        set dstintf "any"
+        set srcaddr "AWS_NET"
+        set dstaddr "AWS_NET"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit 1$unique_code
+        set srcintf "$vpn_prefix-ipip-$t"
+        set dstintf "any"
+        set srcaddr "AWS_NET"
+        set dstaddr "AWS_NET"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+EODATA
+
+		code=$(($unique_code+1))
+		for p in $ports
+		do
+			cat >> "$TMP_FIREWALL_FILE" << EODATA
+    edit $code
+        set srcintf "$p"
+        set dstintf "$vpn_prefix-$t"
+        set srcaddr "all"
+        set dstaddr "AWS_NET"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit $(($code+1))
+        set srcintf "$vpn_prefix-$t"
+        set dstintf "$p"
+        set srcaddr "AWS_NET"
+        set dstaddr "all"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit 1$code
+        set srcintf "$p"
+        set dstintf "$vpn_prefix-ipip-$t"
+        set srcaddr "all"
+        set dstaddr "AWS_NET"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit 1$(($code+1))
+        set srcintf "$vpn_prefix-ipip-$t"
+        set dstintf "$p"
+        set srcaddr "AWS_NET"
+        set dstaddr "all"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+EODATA
+			code=$(($code+2))
+		done
+
+		# Ideally the system interface should use the firewall_inside
+		# and aws_inside addresses.  Alas, AWS reuses these inside
+		# addresses even when the outside addresses are different,
+		# which makes the Fortigate complain about duplicate entries.
+		# So comment out the inside addresses.
+
+		cat >> "$TMP_FIREWALL_FILE" << EODATA
+end
+config system interface
+    edit "$vpn_prefix-$t"
+        set vdom "root"
+#       set ip ${firewall_inside[$t]} 255.255.255.255
+        set allowaccess ping
+        set type tunnel
+        set tcp-mss 1387
+#       set remote-ip ${aws_inside[$t]}
+        set snmp-index $unique_code
+        set interface "$firewall_interface"
+end
+
+EODATA
+
+		base=$(($base+64))
+	done
+
+	cat >> "$TMP_FIREWALL_FILE" << EODATA
+config router static
+EODATA
+
+	# Generate the VPN routing entries first
+
+	code=${network_base}00
+	for t in $(seq $TUNNELS)
+	do
+		cat >> "$TMP_FIREWALL_FILE" << EODATA
+    edit $code
+        set device "$vpn_prefix-$t"
+        set dst 10.$network_base.0.0 255.255.0.0
+        set priority 0
+    next
+EODATA
+		code=$(($code+1))
+	done
+
+	# Generate the IPIP routing entries next.  Give them a higher priority
+	# number so the Fortigate will use the VPN routes ahead of the IPIP
+	# routes.
+
+	for t in $(seq $TUNNELS)
+	do
+		cat >> "$TMP_FIREWALL_FILE" << EODATA
+    edit $code
+        set device "$vpn_prefix-ipip-$t"
+        set dst 10.$network_base.0.0 255.255.0.0
+        set priority 1
+    next
+EODATA
+		code=$(($code+1))
+	done
+
+	cat >> "$TMP_FIREWALL_FILE" << EODATA
+end
+EODATA
+
+else
+	echo "What to do?  Should never happen"
+	exit 1
+fi
+
+# Horrible hack for old firmware.
+
+if [[ "$old_firmware" -eq 1 ]]
+then
+	sed -i -e '/snmp-index/d; /set service/s/ALL/ANY/; s/port1/int_prod/;' "$TMP_FIREWALL_FILE"
+fi
+
+./vpn-delete-firewall "$TMP_FIREWALL_FILE" > "$TMP_FIREWALL_FILE_DELETE"
+
+refresh_file "${TMP_FIREWALL_FILE:?}" "${FIREWALL_FILE:?}"
+refresh_file "${TMP_FIREWALL_FILE_DELETE:?}" "${FIREWALL_FILE_DELETE:?}"

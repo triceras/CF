@@ -1,0 +1,306 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  "Description" : "Add resource records to a hosted zone",
+  "Resources" : {
+    "uswhispircoma" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "HostedZoneName" : "us.whispir.com.",
+        "Name" : "us.whispir.com.",
+        "Type" : "A",
+        "ResourceRecords" : [ "54.153.70.36" ],
+        "TTL" : 60
+      }
+    },
+    "staruswhispircoma" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "HostedZoneName" : "us.whispir.com.",
+        "Name" : "*.us.whispir.com.",
+        "Type" : "A",
+        "ResourceRecords" : [ "54.153.70.36" ],
+        "TTL" : 60
+      }
+    },
+    "cdnuswhispircoma" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "HostedZoneName" : "us.whispir.com.",
+        "Name" : "cdn.us.whispir.com.",
+        "Type" : "A",
+        "ResourceRecords" : [ "54.153.70.36" ],
+        "TTL" : 60
+      }
+    },
+    "discussuswhispircoma" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "HostedZoneName" : "us.whispir.com.",
+        "Name" : "discuss.us.whispir.com.",
+        "Type" : "A",
+        "ResourceRecords" : [ "54.193.8.74" ],
+        "TTL" : 60
+      }
+    },
+    "mailuswhispircoma" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "HostedZoneName" : "us.whispir.com.",
+        "Name" : "mail.us.whispir.com.",
+        "Type" : "A",
+        "ResourceRecords" : [ "52.76.95.163" ],
+        "TTL" : 60
+      }
+    },
+    "mailserviceuswhispircoma" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "HostedZoneName" : "us.whispir.com.",
+        "Name" : "mail.service.us.whispir.com.",
+        "Type" : "A",
+        "ResourceRecords" : [ "52.76.95.163" ],
+        "TTL" : 60
+      }
+    },
+    "smsgateuswhispircoma" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "HostedZoneName" : "us.whispir.com.",
+        "Name" : "smsgate.us.whispir.com.",
+        "Type" : "A",
+        "ResourceRecords" : [ "54.183.248.235" ],
+        "TTL" : 60
+      }
+    },
+    "wwwuswhispircoma" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "HostedZoneName" : "us.whispir.com.",
+        "Name" : "www.us.whispir.com.",
+        "Type" : "A",
+        "ResourceRecords" : [ "54.153.70.36" ],
+        "TTL" : 60
+      }
+    },
+    "uswhispircommx" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "HostedZoneName" : "us.whispir.com.",
+        "Name" : "us.whispir.com.",
+        "Type" : "MX",
+        "ResourceRecords" : [ "10 mail.service.us.whispir.com." ],
+        "TTL" : 60
+      }
+    },
+    "apiuswhispircommx" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "HostedZoneName" : "us.whispir.com.",
+        "Name" : "api.us.whispir.com.",
+        "Type" : "MX",
+        "ResourceRecords" : [ "10 mail.service.us.whispir.com." ],
+        "TTL" : 60
+      }
+    },
+    "companyuswhispircommx" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "HostedZoneName" : "us.whispir.com.",
+        "Name" : "company.us.whispir.com.",
+        "Type" : "MX",
+        "ResourceRecords" : [ "10 mail.service.us.whispir.com." ],
+        "TTL" : 60
+      }
+    },
+    "contactuswhispircommx" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "HostedZoneName" : "us.whispir.com.",
+        "Name" : "contact.us.whispir.com.",
+        "Type" : "MX",
+        "ResourceRecords" : [ "10 mail.service.us.whispir.com." ],
+        "TTL" : 60
+      }
+    },
+    "eapiuswhispircommx" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "HostedZoneName" : "us.whispir.com.",
+        "Name" : "eapi.us.whispir.com.",
+        "Type" : "MX",
+        "ResourceRecords" : [ "10 mail.service.us.whispir.com." ],
+        "TTL" : 60
+      }
+    },
+    "jamesuswhispircommx" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "HostedZoneName" : "us.whispir.com.",
+        "Name" : "james.us.whispir.com.",
+        "Type" : "MX",
+        "ResourceRecords" : [ "10 mail.service.us.whispir.com." ],
+        "TTL" : 60
+      }
+    },
+    "projectuswhispircommx" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "HostedZoneName" : "us.whispir.com.",
+        "Name" : "project.us.whispir.com.",
+        "Type" : "MX",
+        "ResourceRecords" : [ "10 mail.service.us.whispir.com." ],
+        "TTL" : 60
+      }
+    },
+    "serviceuswhispircommx" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "HostedZoneName" : "us.whispir.com.",
+        "Name" : "service.us.whispir.com.",
+        "Type" : "MX",
+        "ResourceRecords" : [ "10 mail.service.us.whispir.com." ],
+        "TTL" : 60
+      }
+    },
+    "smsuswhispircommx" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "HostedZoneName" : "us.whispir.com.",
+        "Name" : "sms.us.whispir.com.",
+        "Type" : "MX",
+        "ResourceRecords" : [ "10 mail.service.us.whispir.com." ],
+        "TTL" : 60
+      }
+    },
+    "useruswhispircommx" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "HostedZoneName" : "us.whispir.com.",
+        "Name" : "user.us.whispir.com.",
+        "Type" : "MX",
+        "ResourceRecords" : [ "10 mail.service.us.whispir.com." ],
+        "TTL" : 60
+      }
+    },
+    "externaluswhispircommx" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "HostedZoneName" : "us.whispir.com.",
+        "Name" : "external.us.whispir.com.",
+        "Type" : "MX",
+        "ResourceRecords" : [ "10 mail.service.us.whispir.com." ],
+        "TTL" : 60
+      }
+    },
+    "listcompanyuswhispircommx" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "HostedZoneName" : "us.whispir.com.",
+        "Name" : "list.company.us.whispir.com.",
+        "Type" : "MX",
+        "ResourceRecords" : [ "10 mail.service.us.whispir.com." ],
+        "TTL" : 60
+      }
+    },
+    "listexternaluswhispircommx" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "HostedZoneName" : "us.whispir.com.",
+        "Name" : "list.external.us.whispir.com.",
+        "Type" : "MX",
+        "ResourceRecords" : [ "10 mail.service.us.whispir.com." ],
+        "TTL" : 60
+      }
+    },
+    "listpersonaluswhispircommx" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "HostedZoneName" : "us.whispir.com.",
+        "Name" : "list.personal.us.whispir.com.",
+        "Type" : "MX",
+        "ResourceRecords" : [ "10 mail.service.us.whispir.com." ],
+        "TTL" : 60
+      }
+    },
+    "listprojectuswhispircommx" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "HostedZoneName" : "us.whispir.com.",
+        "Name" : "list.project.us.whispir.com.",
+        "Type" : "MX",
+        "ResourceRecords" : [ "10 mail.service.us.whispir.com." ],
+        "TTL" : 60
+      }
+    },
+    "personaluswhispircommx" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "HostedZoneName" : "us.whispir.com.",
+        "Name" : "personal.us.whispir.com.",
+        "Type" : "MX",
+        "ResourceRecords" : [ "10 mail.service.us.whispir.com." ],
+        "TTL" : 60
+      }
+    },
+    "teamcompanyuswhispircommx" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "HostedZoneName" : "us.whispir.com.",
+        "Name" : "team.company.us.whispir.com.",
+        "Type" : "MX",
+        "ResourceRecords" : [ "10 mail.service.us.whispir.com." ],
+        "TTL" : 60
+      }
+    },
+    "teamcontactuswhispircommx" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "HostedZoneName" : "us.whispir.com.",
+        "Name" : "team.contact.us.whispir.com.",
+        "Type" : "MX",
+        "ResourceRecords" : [ "10 mail.service.us.whispir.com." ],
+        "TTL" : 60
+      }
+    },
+    "teamexternaluswhispircommx" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "HostedZoneName" : "us.whispir.com.",
+        "Name" : "team.external.us.whispir.com.",
+        "Type" : "MX",
+        "ResourceRecords" : [ "10 mail.service.us.whispir.com." ],
+        "TTL" : 60
+      }
+    },
+    "teampersonaluswhispircommx" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "HostedZoneName" : "us.whispir.com.",
+        "Name" : "team.personal.us.whispir.com.",
+        "Type" : "MX",
+        "ResourceRecords" : [ "10 mail.service.us.whispir.com." ],
+        "TTL" : 60
+      }
+    },
+    "teamuseruswhispircommx" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "HostedZoneName" : "us.whispir.com.",
+        "Name" : "team.user.us.whispir.com.",
+        "Type" : "MX",
+        "ResourceRecords" : [ "10 mail.service.us.whispir.com." ],
+        "TTL" : 60
+      }
+    },
+    "uswhispircomtxt" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "HostedZoneName" : "us.whispir.com.",
+        "Name" : "us.whispir.com.",
+        "Type" : "TXT",
+        "ResourceRecords" : [ "\"v=spf1 a:mail.service.us.whispir.com. ~all\"" ],
+        "TTL" : 60
+      }
+    }
+  }
+}

@@ -1,0 +1,127 @@
+#!/bin/bash
+
+# Create or update application security groups.
+#
+# The calling environment must contain the required credentials for the target
+# account.
+#
+# Parameters are:
+#   Region.
+#   VPC stack name.
+#   Common security stack name.
+
+set -e
+set -o pipefail
+
+region=${1:?"Missing region name"}
+vpc_stack_name=${2:?"Missing VPC stack name"}
+common_stack_name=${3:?"Missing common security stack name"}
+shift 3
+
+source ./functions
+
+# Get outputs from the stacks we depend on.
+
+get_vpc_data ${vpc_stack_name:?}
+eval $(stack_outputs $common_stack_name)
+
+json_fragment << 'EODATA'
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  "Description" : "Define the application security groups for a VPC",
+  "Parameters" : {
+EODATA
+
+json_fragment < office-ips
+
+json_fragment << 'EODATA'
+  },
+  "Resources" : {
+EODATA
+
+sg jboss "application server security group"
+sgingress jboss 4447 jboss
+sgingress jboss 7100 jboss
+sgingress jboss 4713 jboss
+sgingress jboss 5445 jboss
+sgingress jboss 7443 jboss
+sgingress jboss 8080 jboss
+sgingress jboss 4525 ${SECmail:?}		# defined in stack common-security
+sgingress jboss 7299 jboss
+sgingress jboss 9102 jboss
+sgingress jboss 7080 jboss
+sgingress jboss 8787 jboss
+sgingress jboss 9142 jboss
+sgingress jboss 8009 webserver
+sgingress jboss 4712 jboss
+sgingress jboss 57600 jboss
+sgingress jboss 7600 jboss
+sgingress jboss 5858 jboss
+sgingress jboss 7500 jboss
+sgingress jboss 16163 jboss
+sgingress jboss 5455 jboss
+
+sg outgoingftp "Outgoing ftp"
+sgingress outgoingftp $linux_ephemeral_from jboss $linux_ephemeral_to
+sgingress outgoingftp 21 jboss
+sgingress outgoingftp 20 jboss
+
+sg nodejs "nodejs"
+ipingress nodejs 443 0.0.0.0/0
+
+sg rds "Security group for the sg1 RDS"
+sgingress rds 3308 ${SECZabbixServer:?}	# defined in stack common-security
+sgingress rds 3308 jboss
+# FIXME: Allow access to rds from the office because we run Postgres clients on
+# office PCs to do maintence on rds.
+ipingress rds 3308 OfficeExternal
+ipingress rds 3308 OfficeInternalPort1
+ipingress rds 3308 OfficeInternalPort2
+ipingress rds 3308 OfficeInternalPort4
+
+sg webserver "Webserver security group"
+ipingress webserver 443 0.0.0.0/0
+ipingress webserver 80 0.0.0.0/0
+
+sg gluster "Gluster-Ports"
+ipingress gluster 111 $vpc_hosts 111 tcp
+ipingress gluster 111 $vpc_hosts 111 udp
+ipingress gluster 24007 $vpc_hosts 24012
+ipingress gluster 49152 $vpc_hosts 49155
+ipingress gluster 38465 $vpc_hosts 38467
+
+sg mongodb "MongoDB security group"
+sgingress mongodb 27017 mongodb
+sgingress mongodb 27017 jboss
+
+sg cassandra "Cassandra security group"
+sgingress cassandra 7000 cassandra					# Inter-node cluster communication
+sgingress cassandra 7199 cassandra					# JMX monitoring port
+sgingress cassandra 9160 jboss						# client port (Thrift)
+sgingress cassandra $linux_ephemeral_from cassandra $linux_ephemeral_to	# Cassandra uses ephemeral ports for inter-node server ports
+# sgingress cassandra 9102 cassandra					# Maybe v2.0?
+# sgingress cassandra 10050 cassandra					# zabbix agent
+
+sg rabbitmq "Security group for the RabbitMQ cluster"
+sgingress rabbitmq 30000 rabbitmq 30010
+sgingress rabbitmq 4369 rabbitmq
+sgingress rabbitmq 5672 jboss
+sgingress rabbitmq 5672 ${SECmail:?}		# defined in stack common-security
+
+sg apacheproxy "Security group for the Apache Proxy servers"
+ipingress apacheproxy 443 0.0.0.0/0
+ipingress apacheproxy 80 0.0.0.0/0
+
+json_fragment << 'EODATA'
+  },
+  "Outputs" : {
+EODATA
+
+sg_outputs SECAPP
+
+json_fragment << 'EODATA'
+  }
+}
+EODATA
+
+build_stack

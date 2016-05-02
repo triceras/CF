@@ -1,0 +1,19 @@
+#!/bin/bash
+
+set -e
+
+fqdn=${1:?"Missing fully qualified domain name"}
+
+cat << EODATA
+NETWORKING=yes
+HOSTNAME=${fqdn}
+NOZEROCONF=yes
+NETWORKING_IPV6=no
+IPV6INIT=no
+IPV6_ROUTER=no
+IPV6_AUTOCONF=no
+IPV6FORWARDING=no
+IPV6TO4INIT=no
+IPV6_CONTROL_RADVD=no
+SEARCH=${VPCDomain:?}
+EODATA

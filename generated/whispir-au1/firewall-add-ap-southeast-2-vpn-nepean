@@ -1,0 +1,70 @@
+# Account: whispir-au1
+# Region: ap-southeast-2
+# Firewall type: Juniper
+# Firewall interface: reth0.0
+# VPC stack: ap-southeast-2-vpc
+# VPC id: vpc-72ea5917
+# VPN stack: ap-southeast-2-vpn-nepean
+# VPN Connection Id: vpn-8b360596
+# Customer gateway ip: 203.45.17.178
+# Network base: 32
+
+# Global definitions, used by all AWS VPNs
+
+set security ike proposal aws-vpn authentication-algorithm sha1
+set security ike proposal aws-vpn authentication-method pre-shared-keys
+set security ike proposal aws-vpn dh-group group2
+set security ike proposal aws-vpn encryption-algorithm aes-128-cbc
+set security ike proposal aws-vpn lifetime-seconds 28800
+set security ipsec policy aws-vpn perfect-forward-secrecy keys group2
+set security ipsec policy aws-vpn proposals aws-vpn
+set security ipsec proposal aws-vpn authentication-algorithm hmac-sha1-96
+set security ipsec proposal aws-vpn encryption-algorithm aes-128-cbc
+set security ipsec proposal aws-vpn lifetime-seconds 3600
+set security ipsec proposal aws-vpn protocol esp
+
+# Per tunnel definitions
+
+set security ike policy ike-pol-aws-au1-1 mode main
+set security ike policy ike-pol-aws-au1-1 pre-shared-key ascii-text SdPh3dJQ2pZ1omH5RB9EJM_OfN4EGveq
+set security ike policy ike-pol-aws-au1-1 proposals aws-vpn
+delete security ike gateway gw-aws-au1-1
+set security ike gateway gw-aws-au1-1 address 54.240.204.123
+set security ike gateway gw-aws-au1-1 dead-peer-detection
+set security ike gateway gw-aws-au1-1 external-interface reth0.0
+set security ike gateway gw-aws-au1-1 ike-policy ike-pol-aws-au1-1
+set security ipsec vpn aws-au1-1 bind-interface st0.3210
+set security ipsec vpn aws-au1-1 df-bit clear
+set security ipsec vpn aws-au1-1 ike gateway gw-aws-au1-1
+set security ipsec vpn aws-au1-1 ike ipsec-policy aws-vpn
+set security ipsec vpn aws-au1-1 vpn-monitor destination-ip 169.254.247.37
+set security ipsec vpn aws-au1-1 vpn-monitor source-interface st0.3210
+delete interfaces st0.3210
+set interfaces st0.3210 family inet address 169.254.247.38/30
+set interfaces st0.3210 family inet mtu 1436
+
+set routing-options static route 10.32.0.0/16 next-hop st0.3210
+
+set security zones security-zone Trusted interfaces st0.3210
+
+set security ike policy ike-pol-aws-au1-2 mode main
+set security ike policy ike-pol-aws-au1-2 pre-shared-key ascii-text 8FLdipaYPublERbRlI.liylQwTdKSgpb
+set security ike policy ike-pol-aws-au1-2 proposals aws-vpn
+delete security ike gateway gw-aws-au1-2
+set security ike gateway gw-aws-au1-2 address 54.240.204.89
+set security ike gateway gw-aws-au1-2 dead-peer-detection
+set security ike gateway gw-aws-au1-2 external-interface reth0.0
+set security ike gateway gw-aws-au1-2 ike-policy ike-pol-aws-au1-2
+set security ipsec vpn aws-au1-2 bind-interface st0.3220
+set security ipsec vpn aws-au1-2 df-bit clear
+set security ipsec vpn aws-au1-2 ike gateway gw-aws-au1-2
+set security ipsec vpn aws-au1-2 ike ipsec-policy aws-vpn
+set security ipsec vpn aws-au1-2 vpn-monitor destination-ip 169.254.247.33
+set security ipsec vpn aws-au1-2 vpn-monitor source-interface st0.3220
+delete interfaces st0.3220
+set interfaces st0.3220 family inet address 169.254.247.34/30
+set interfaces st0.3220 family inet mtu 1436
+
+set routing-options static route 10.32.0.0/16 next-hop st0.3220
+
+set security zones security-zone Trusted interfaces st0.3220

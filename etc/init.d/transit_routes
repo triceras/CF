@@ -1,0 +1,126 @@
+#!/bin/sh
+#
+# transit_routes Start the transit interfaces and routes.
+#
+# chkconfig: 2345 09 91
+# description: Starts and stops transit interfaces.
+#
+# config: /etc/sysconfig/transit_routes-config
+#
+### BEGIN INIT INFO
+# Provides: transit_routes
+# Required-Start:
+# Required-Stop:
+# Default-Start: 2 3 4 5
+# Default-Stop: 0 1 6
+# Short-Description: start and stop transit interfaces and routes
+# Description: Start and stop transit interfaces and routes
+### END INIT INFO
+
+# Source function library.
+. /etc/init.d/functions
+
+TRANSIT_ROUTES=transit_routes
+TRANSIT_ROUTES_CONFIG=/etc/sysconfig/${TRANSIT_ROUTES}-config
+
+del_ip_rules() {
+  ip rule list | sed -ne '/ lookup '${TRANSIT_ROUTES_TABLE?}' *$/s/.*:/ip rule del/p;' | sh
+}
+add_ip_rules() {
+  set -e
+  for m in ${TRANSIT_ROUTES_MARKS?}
+  do
+    ip rule add fwmark $m table ${TRANSIT_ROUTES_TABLE?}
+  done
+}
+dead() {
+  alive="^($(echo $TRANSIT_ROUTES_TUNNELS | tr ' ' '|'))\$"
+  while [ -n "$1" ]
+  do
+    filter=$(echo "$1" | egrep -v "$alive" || true)
+    case $filter in
+      '') ;;
+      *) echo $1; ;;
+    esac
+    shift
+  done
+}
+tunnels() {
+  cd /etc/sysconfig/network-scripts
+  echo $(ls $1-ipip* | sed -e '/\.bak/d; s/.*-ipip//;')
+}
+cleanup() {
+  cd /etc/sysconfig/network-scripts
+  d="$(echo $(dead $(tunnels $1)))"
+  for i in $d
+  do
+    if [ -e ifcfg-ipip$i ]
+    then
+      ifdown ipip$i
+    fi
+    rm -f $1-ipip$i{,.bak}
+  done
+  rm -f *-ipip*.bak
+}
+
+start() {
+  # Do not start if there is no config file.
+  [ ! -f "$TRANSIT_ROUTES_CONFIG" ] && return 6
+  (
+    set -e
+    source "$TRANSIT_ROUTES_CONFIG"
+    echo -n "${TRANSIT_ROUTES}: Starting: "
+    del_ip_rules
+    add_ip_rules
+    cleanup ifcfg
+    cleanup route
+    declare -A up
+    for i in $(ifconfig | sed -rne '/^ipip[0-9]+\>/{s/\s.*//; s/ipip//; p;}')
+    do
+      up[$i]=1
+    done
+    for i in $(tunnels ifcfg)
+    do
+      [ "${up[$i]}" == '1' ] || ifup ipip$i
+    done
+  )
+  if [ $? -eq 0 ]; then
+    success; echo
+  else
+    failure; echo; return 1
+  fi
+}
+
+stop() {
+  # Do not stop if there is no config file.
+  [ ! -f "$TRANSIT_ROUTES_CONFIG" ] && return 6
+  (
+    set -e
+    source "$TRANSIT_ROUTES_CONFIG"
+    echo -n "${TRANSIT_ROUTES}: Stopping: "
+    del_ip_rules
+    for i in $(tunnels ifcfg)
+    do
+      ifdown ipip$i
+    done
+  )
+  if [ $? -eq 0 ]; then
+      success; echo
+  else
+      failure; echo; return 1
+  fi
+}
+
+restart() {
+  stop
+  start
+}
+
+case "$1" in
+  start) start; RETVAL=$?; ;;
+  stop) stop; RETVAL=$?; ;;
+  restart|force-reload) restart; RETVAL=$?; ;;
+  *) echo "Usage: ${TRANSIT_ROUTES} {start|stop|restart}"; RETVAL=2; ;;
+esac
+
+exit $RETVAL

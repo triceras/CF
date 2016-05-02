@@ -1,0 +1,126 @@
+#!/bin/bash
+
+# Some of the existing AWS objects should not be used.  For each such object,
+# extract the tags.  If the tags do not include a Name of 'Do not use!' then
+# set the Name to 'Do not use!'.
+#
+# Parameters:
+#   Region.
+#   VPC stack name.
+
+set -e
+set -o pipefail
+
+region=${1:?"Missing region name"}
+vpc_stack_name=${2:?"Missing VPC stack name"}
+shift 2
+
+tag='Do not use!'
+
+# Skip 'do not use' if SKIP_DNU is set.
+
+[[ -z "$SKIP_DNU" ]] || exit 0
+
+# Take all the outputs from the input stacks and put them into my environment.
+
+eval $(aws cloudformation describe-stacks --region $region --stack-name $vpc_stack_name --output text | awk -F'\t' '/OUTPUTS/{printf("export %s=\"%s\"\n", $3, $4)}')
+
+# The sed scripts pull out lines that we care about but only if the resource is
+# not one of ours.  IOW, it pulls out entries that must not be used.  The aws
+# output is multi line so sed accumulates the lines for each group.  At the
+# start of a new group or at the end of input, sed pulls down the saved group
+# and decides whether to print it or not.
+
+fixme=$(
+	(
+		set -e
+		set -o pipefail
+		(
+			set -e
+			set -o pipefail
+
+			# First group.  These resources all include the VPC id
+			# or the VPC stack name, which makes it easy to decide
+			# if they belong to our VPC or not.
+
+			action="{x; /^\$/b; /($VPCID|$vpc_stack_name)/b; p; b;};"
+
+			for i in vpcs subnets internet-gateways network-acls security-groups vpn-gateways
+			do
+				aws ec2 describe-$i --region $region --output text
+			done |
+				sed -rn \
+					-e "/VPCS/$action" \
+					-e "/SUBNETS/$action" \
+					-e "/INTERNETGATEWAYS/$action" \
+					-e "/NETWORKACLS/$action" \
+					-e "/SECURITYGROUPS/$action" \
+					-e "/VPNGATEWAYS/$action" \
+					-e "H;" \
+					-e "\$$action"
+
+			# Second group.  These resources not refer to the VPC,
+			# so we have to assume that any resource built by any
+			# stack is valid.
+			#
+			# Actually the route-tables do refer to the VPC but the
+			# default (main) route table is not to be used.  So
+			# look for a stack name for route-tables as well.
+
+			action="{x; /^\$/b; /aws:cloudformation:stack-name/b; p; b;};"
+
+			for i in customer-gateways route-tables vpn-connections
+			do
+				aws ec2 describe-$i --region $region --output text
+			done |
+				sed -rn \
+					-e "/CUSTOMERGATEWAYS/$action" \
+					-e "/ROUTETABLES/$action" \
+					-e "/VPNCONNECTIONS/$action" \
+					-e "H;" \
+					-e "\$$action"
+		) |
+			awk -F'\t' '
+				function pr(v) {
+					if (resource != "") { print resource }
+					resource = v
+				}
+
+				# First group
+
+				/VPCS/ { pr($7) }
+				/SUBNETS/ { pr($8) }
+				/INTERNETGATEWAYS/ { pr($2) }
+				/NETWORKACLS/ { pr($3) }
+				/SECURITYGROUPS/ { pr($3) }
+				/VPNGATEWAYS/ { pr($4) }
+
+				# Second group.  VPNCONNECTIONS have a multi
+				# line identification line so look for the line
+				# that starts with tab then cgw- instead.
+
+				/CUSTOMERGATEWAYS/ { pr($3) }
+				/ROUTETABLES/ { pr($2) }
+				/^	cgw-/ { pr($6) }
+
+				# Now check the tags
+
+				/TAGS/ { if ($2 == "Name" && $3 == "'"$tag"'") { resource = "" } }
+
+				# Print the last resource or a blank line.
+
+				END { print resource }
+			'
+	)
+)
+
+if [ -z "$fixme" ]
+then
+	echo "No resources need to be marked as '$tag'"
+else
+	echo Resources to be marked "'$tag'" - $fixme
+	for i in $fixme
+	do
+		aws ec2 create-tags --region $region --resources $i --tags Key=Name,Value='"'"$tag"'"'
+	done
+fi

@@ -1,0 +1,70 @@
+# Account: whispir-us
+# Region: us-west-1
+# Firewall type: Juniper
+# Firewall interface: reth0.0
+# VPC stack: us-west-1-vpc
+# VPC id: vpc-21f54644
+# VPN stack: us-west-1-vpn-nepean
+# VPN Connection Id: vpn-48891510
+# Customer gateway ip: 203.45.17.178
+# Network base: 34
+
+# Global definitions, used by all AWS VPNs
+
+set security ike proposal aws-vpn authentication-algorithm sha1
+set security ike proposal aws-vpn authentication-method pre-shared-keys
+set security ike proposal aws-vpn dh-group group2
+set security ike proposal aws-vpn encryption-algorithm aes-128-cbc
+set security ike proposal aws-vpn lifetime-seconds 28800
+set security ipsec policy aws-vpn perfect-forward-secrecy keys group2
+set security ipsec policy aws-vpn proposals aws-vpn
+set security ipsec proposal aws-vpn authentication-algorithm hmac-sha1-96
+set security ipsec proposal aws-vpn encryption-algorithm aes-128-cbc
+set security ipsec proposal aws-vpn lifetime-seconds 3600
+set security ipsec proposal aws-vpn protocol esp
+
+# Per tunnel definitions
+
+set security ike policy ike-pol-aws-us-1 mode main
+set security ike policy ike-pol-aws-us-1 pre-shared-key ascii-text fU3C8ymp0CIUJZ444sDp0QF0_dsN9Fd4
+set security ike policy ike-pol-aws-us-1 proposals aws-vpn
+delete security ike gateway gw-aws-us-1
+set security ike gateway gw-aws-us-1 address 54.183.18.110
+set security ike gateway gw-aws-us-1 dead-peer-detection
+set security ike gateway gw-aws-us-1 external-interface reth0.0
+set security ike gateway gw-aws-us-1 ike-policy ike-pol-aws-us-1
+set security ipsec vpn aws-us-1 bind-interface st0.3410
+set security ipsec vpn aws-us-1 df-bit clear
+set security ipsec vpn aws-us-1 ike gateway gw-aws-us-1
+set security ipsec vpn aws-us-1 ike ipsec-policy aws-vpn
+set security ipsec vpn aws-us-1 vpn-monitor destination-ip 169.254.11.153
+set security ipsec vpn aws-us-1 vpn-monitor source-interface st0.3410
+delete interfaces st0.3410
+set interfaces st0.3410 family inet address 169.254.11.154/30
+set interfaces st0.3410 family inet mtu 1436
+
+set routing-options static route 10.34.0.0/16 next-hop st0.3410
+
+set security zones security-zone Trusted interfaces st0.3410
+
+set security ike policy ike-pol-aws-us-2 mode main
+set security ike policy ike-pol-aws-us-2 pre-shared-key ascii-text zOTrrJpzbcrQvS7Iwih9xj1gXaQxV4Pr
+set security ike policy ike-pol-aws-us-2 proposals aws-vpn
+delete security ike gateway gw-aws-us-2
+set security ike gateway gw-aws-us-2 address 54.183.18.111
+set security ike gateway gw-aws-us-2 dead-peer-detection
+set security ike gateway gw-aws-us-2 external-interface reth0.0
+set security ike gateway gw-aws-us-2 ike-policy ike-pol-aws-us-2
+set security ipsec vpn aws-us-2 bind-interface st0.3420
+set security ipsec vpn aws-us-2 df-bit clear
+set security ipsec vpn aws-us-2 ike gateway gw-aws-us-2
+set security ipsec vpn aws-us-2 ike ipsec-policy aws-vpn
+set security ipsec vpn aws-us-2 vpn-monitor destination-ip 169.254.10.25
+set security ipsec vpn aws-us-2 vpn-monitor source-interface st0.3420
+delete interfaces st0.3420
+set interfaces st0.3420 family inet address 169.254.10.26/30
+set interfaces st0.3420 family inet mtu 1436
+
+set routing-options static route 10.34.0.0/16 next-hop st0.3420
+
+set security zones security-zone Trusted interfaces st0.3420

@@ -1,0 +1,62 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  "Description" : "Add a VPN to an existing VPC/VGW",
+  "Resources" : {
+    "CustomerGateway" : {
+      "Type" : "AWS::EC2::CustomerGateway",
+      "Properties" : {
+        "Type" : "ipsec.1",
+        "BgpAsn" : "65033",
+        "IpAddress" : "203.191.201.76",
+        "Tags" : [
+          { "Key" : "Name", "Value" : "Gateway to office"}
+        ]
+      }
+    },
+    "VPNConnection" : {
+      "DependsOn" : ["CustomerGateway"],
+      "Type" : "AWS::EC2::VPNConnection",
+      "Properties" : {
+        "Type" : "ipsec.1",
+        "StaticRoutesOnly" : "true",
+        "CustomerGatewayId" : { "Ref" : "CustomerGateway" },
+        "VpnGatewayId" : "vgw-df0b4e8d",
+        "Tags" : [{ "Key" : "Name", "Value" : "ap-southeast-1-vpn-office" }]
+      }
+    },
+    "VPNConnectionRoute0A01A10018" : {
+      "DependsOn" : ["VPNConnection"],
+      "Type" : "AWS::EC2::VPNConnectionRoute",
+      "Properties" : {
+        "VpnConnectionId" : { "Ref" : "VPNConnection" },
+        "DestinationCidrBlock" : "10.1.161.0/24"
+      }
+    },
+    "VPNConnectionRoute0A01A20018" : {
+      "DependsOn" : ["VPNConnection"],
+      "Type" : "AWS::EC2::VPNConnectionRoute",
+      "Properties" : {
+        "VpnConnectionId" : { "Ref" : "VPNConnection" },
+        "DestinationCidrBlock" : "10.1.162.0/24"
+      }
+    },
+    "VPNConnectionRoute0A01A30018" : {
+      "DependsOn" : ["VPNConnection"],
+      "Type" : "AWS::EC2::VPNConnectionRoute",
+      "Properties" : {
+        "VpnConnectionId" : { "Ref" : "VPNConnection" },
+        "DestinationCidrBlock" : "10.1.163.0/24"
+      }
+    }
+  },
+  "Outputs" : {
+    "VPNCustomerGatewayId" : {
+      "Description" : "CustomerGateway Id",
+      "Value" : { "Ref" : "CustomerGateway" }
+    },
+    "VPNConnectionId" : {
+      "Description" : "VPNConnection Id",
+      "Value" : { "Ref" : "VPNConnection" }
+    }
+  }
+}

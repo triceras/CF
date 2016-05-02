@@ -1,0 +1,120 @@
+#!/bin/bash
+
+# Create or update a Cloudformation stack.  Wait for the operation to complete.
+#
+# The calling environment must contain the required credentials for the target
+# account.
+#
+# Parameters are:
+#   Region.
+#   Stack name.
+#   Template URL.
+#   Any other parameters are passed directly to the create or update stack
+#   operations.
+
+set -e
+set -o pipefail
+
+region=${1:?"Missing region name"}
+stack_name=${2:?"Missing stack name"}
+template=${3:?"Missing stack template"}
+shift 3
+
+# Skip cloud formation if SKIP_CF is set.  Just generate the files, do not run
+# them.
+
+[[ -z "$SKIP_CF" ]] || exit 0
+
+ret=0
+output=/tmp/${0##*/}-$$
+
+get_status() {
+	aws cloudformation describe-stacks --region $region --query "Stacks[?StackName == '$stack_name'].StackStatus" --output text
+}
+
+status=$(get_status)
+
+if [[ "$status" = DELETE_IN_PROGRESS || "$status" = CREATE_IN_PROGRESS || "$status" = UPDATE_COMPLETE_CLEANUP_IN_PROGRESS || "$status" = UPDATE_ROLLBACK_IN_PROGRESS ]]
+then
+	echo $stack_name is in "$status", waiting for operation to complete
+	while [[ $ret -eq 0 ]]
+	do
+		status=$(get_status)
+		if [[ -z "$status" ]]
+		then
+			echo
+			break
+		fi
+		if [[ "$status" != "$prev" ]]
+		then
+			echo -ne "\nStack $stack_name $status "
+			prev="$status"
+		else
+			echo -n '.'
+		fi
+		sleep 5
+	done
+fi
+
+if [[ "$status" = ROLLBACK_COMPLETE || "$status" = ROLLBACK_FAILED || "$status" = DELETE_FAILED ]]
+then
+	echo An earlier create of $stack_name failed, deleting the remnants first
+	./delete-stack ${region:?} ${stack_name:?}
+	status=$(get_status)
+fi
+
+if [[ -z "$status" ]]
+then
+	operation=create-stack
+else
+	operation=update-stack
+fi
+
+aws cloudformation $operation --region $region --stack-name $stack_name --template-body "$template" --output text "$@" > $output 2>&1 || ret=$?
+
+# We do not consider 'no updates' to be an error.
+
+if [[ $ret -ne 0 && "$(tr -d '\n' < $output)" = 'A client error (ValidationError) occurred when calling the UpdateStack operation: No updates are to be performed.' ]]
+then
+	ret=0
+	echo "No updates for stack $stack_name" > $output
+fi
+cat $output
+
+if [[ $ret = 0 && "$(cat $output)" =~ ^arn: ]]
+then
+	while (true)
+	do
+		# The stack is being created or updated
+		status=$(get_status)
+		if [[ "$status" =~ IN_PROGRESS ]]
+		then
+			if [[ "$status" != "$prev" ]]
+			then
+				echo -ne "\nStack $stack_name $status "
+				prev="$status"
+			else
+				echo -n '.'
+			fi
+			sleep 5
+			continue
+		fi
+		if [[ "$status" =~ COMPLETE ]]
+		then
+			if [[ "$status" = 'UPDATE_COMPLETE' || "$status" = 'CREATE_COMPLETE' ]]
+			then
+				echo -e "\nStack $stack_name $status"
+			else
+				echo -e "\nStack $stack_name failed"
+				ret=1
+			fi
+			break
+		fi
+		echo -e "\nStack $stack_name $status"
+		ret=1
+		break
+	done
+fi
+
+rm -f $output
+exit $ret

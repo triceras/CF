@@ -1,0 +1,6 @@
+config router static
+delete 3520
+end
+config router static
+delete 3510
+end

@@ -1,0 +1,408 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  "Description" : "Define a util instance in a VPC",
+  "Parameters" : {
+    "KeyPairName" : {
+      "Description" : "Name of an existing EC2 KeyPair (find or create here: https://console.aws.amazon.com/ec2/v2/home#KeyPairs: )",
+      "Type" : "String",
+      "MinLength": "1",
+      "MaxLength": "64",
+      "Default" : "whispir_common",
+      "AllowedPattern" : "[-_ a-zA-Z0-9]*",
+      "ConstraintDescription" : "can contain only alphanumeric characters, spaces, dashes and underscores."
+    }
+  },
+  "Resources" : {
+    "util1" : {
+      "Type" : "AWS::EC2::Instance",
+      "CreationPolicy" : {
+        "ResourceSignal" : {
+          "Timeout" : "PT20M"
+        }
+      },
+      "Metadata" : {
+        "AWS::CloudFormation::Init" : {
+          "configSets" : {
+            "default"    : [ "base", "util", "puppetrole", "puppetagent" ]
+          },
+          "base" : {
+            "files" : {
+              "/etc/cfn/cfn-hup.conf" : {
+                "content" : { "Fn::Join" : ["", [
+                  "[main]", "\n",
+                  "stack=", { "Ref" : "AWS::StackId" }, "\n",
+                  "region=", { "Ref" : "AWS::Region" }, "\n",
+                  "interval=1"
+                  ]]
+                }
+              },
+              "/etc/cfn/hooks.d/cfn-auto-reloader.conf" : {
+                "content": { "Fn::Join" : ["", [
+                  "[cfn-auto-reloader-hook]\n",
+                  "triggers=post.update\n",
+                  "path=Resources.util1.Metadata.AWS::CloudFormation::Init\n",
+                  "action=/opt/aws/bin/cfn-init -v -s ", { "Ref" : "AWS::StackId" },
+                                     " -r util1",
+                                     " --region ", { "Ref" : "AWS::Region" },
+                                     "\n"
+                  ]]
+                }
+              },
+              "/etc/sysconfig/network-scripts/VPCData" : {
+                "content" : { "Fn::Join" : ["", [
+"VPCZones=\"A B\"\nVPCRegion=ap-southeast-1\nVPCNetworkBase=33\nVPCAccountName=whispir-sg1\nVPCNameServer1=10.33.0.10\nVPCNameServer2=10.33.64.10\nVPCDomain=ap-southeast-1.sg1.internal\n"
+                  ]]
+                },
+                "mode" : "000644"
+              },
+              "/etc/sysconfig/network" : {
+                "content" : { "Fn::Join" : ["", [
+"NETWORKING=yes\nHOSTNAME=util1.ap-southeast-1.sg1.internal\nNOZEROCONF=yes\nNETWORKING_IPV6=no\nIPV6INIT=no\nIPV6_ROUTER=no\nIPV6_AUTOCONF=no\nIPV6FORWARDING=no\nIPV6TO4INIT=no\nIPV6_CONTROL_RADVD=no\nSEARCH=ap-southeast-1.sg1.internal\n"
+                  ]]
+                },
+                "mode" : "000644"
+              }
+            },
+            "commands" : {
+              "010" : {
+                "command" : "yum erase -y sendmail",
+                "ignoreErrors" : "true"
+              },
+              "020" : {
+                "command" : "sed -ne '/localdomain/d; s/^HOSTNAME=/hostname /p' /etc/sysconfig/network | sh"
+              },
+              "030" : {
+                "command" : "service boot_signal restart"
+              },
+              "040" : {
+                "command" : "service network restart",
+                "test" : "grep -q '^search\\s\\+\\S\\+\\s' /etc/resolv.conf"
+              },
+              "050" : {
+                "command" : "service rsyslog restart"
+              }
+            },
+            "services" : {
+              "sysvinit" : {
+                "cfn-hup" : {
+                  "enabled" : "true",
+                  "ensureRunning" : "true",
+                  "files" : [ "/etc/cfn/cfn-hup.conf", "/etc/cfn/hooks.d/cfn-auto-reloader.conf" ]
+                }
+              }
+            }
+          },
+          "puppetrole" : {
+            "files" : {
+              "/etc/facter/facts.d/puppetrole" : {
+                "content" : "#!/bin/bash\necho puppetrole=util",
+                "mode" : "0755"
+              }
+            },
+            "commands" : {
+              "000" : {
+                "command" : "rm -f /etc/facter/facts.d/*.bak"
+              }
+            }
+          },
+          "puppetagent" : {
+            "packages" : {
+              "yum" : {
+                "puppet" : []
+              }
+            },
+            "files" : {
+              "/etc/puppet/puppet.conf.CF" : {
+                "content" : { "Fn::Join" : ["", [
+"# WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING\n# WARNING                                                                 WARNING\n# WARNING                                                                 WARNING\n# WARNING   This file is duplicated in puppet/aws and in AWS-devops/CF.   WARNING\n# WARNING   Make sure that both sources generate identical contents.      WARNING\n# WARNING                                                                 WARNING\n# WARNING                                                                 WARNING\n# WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING\n\n[main]\n    # The Puppet log directory.\n    # The default value is '$vardir/log'.\n    logdir = /var/log/puppet\n\n    # Where Puppet PID files are kept.\n    # The default value is '$vardir/run'.\n    rundir = /var/run/puppet\n\n    # Where SSL certificates are kept.\n    # The default value is '$confdir/ssl'.\n    ssldir = $vardir/ssl\n\n    certname = <%= @uuid.downcase %>\n\n[agent]\n    # The file in which puppetd stores a list of the classes\n    # associated with the retrieved configuratiion.  Can be loaded in\n    # the separate ``puppet`` executable using the ``--loadclasses``\n    # option.\n    # The default value is '$confdir/classes.txt'.\n    classfile = $vardir/classes.txt\n\n    # Where puppetd caches the local configuration.  An\n    # extension indicating the cache format is added automatically.\n    # The default value is '$confdir/localconfig'.\n    localconfig = $vardir/localconfig\n\n    # The default environment is production.  Note that this indicates the\n    # production version of the Puppet manifests, do not confuse it with the\n    # application status in the current account.  In an application development\n    # account, you would normally run the production version of the puppet\n    # manifests.  The server role tells the puppet master the state of the\n    # applications on that server.\n\n    environment = production\n"
+                  ]]
+                },
+                "mode" : "000644"
+              }
+            },
+            "commands" : {
+              "500" : {
+                "command" : "cp -a /etc/puppet/puppet.conf.CF /etc/puppet/puppet.conf; uuid=$(facter uuid); sed -i -e s'/<%= @uuid[^>]*>/'${uuid,,}'/' /etc/puppet/puppet.conf",
+                "test" : "! grep -q '^\\s*server\\>' /etc/puppet/puppet.conf"
+              }
+            },
+            "services" : {
+              "sysvinit" : {
+                "puppet" : {
+                  "enabled" : "true",
+                  "ensureRunning" : "true"
+                }
+              }
+            }
+          },
+          "util" : {
+            "packages" : {
+              "yum" : {
+                "tcpdump" : [],
+                "mtr" : [],
+                "nmap" : [],
+                "iproute" : [],
+                "bind" : [],
+                "procmail" : [],
+                "cronie" : []
+              }
+            },
+            "files" : {
+              "/usr/bin/build.named" : {
+                "content" : { "Fn::Join" : ["", [
+"#!/bin/bash\n\n# Control the building of the DNS files.\n#\n# This script is designed to be silent unless it hits any problems.  That makes\n# it easier to run automatically, you only need to look at the logs when\n# something goes wrong.\n\nset -e\n\nlogger Info: Running $0\n\nsource /etc/sysconfig/network-scripts/VPCData\n\nname_servers=\"util1 util2\"\nvpcaccountsuffix=${VPCAccountName#whispir-}\nbind_zone=${VPCRegion}.${vpcaccountsuffix}.internal\n\n: ${LOCK=/var/tmp/build.named.lock}\n: ${TARGET_DIR=/var/named}\n: ${SERIAL=$(date '+%s')}\n\n# Must not execute this script in TARGET_DIR, it would overwrite the live\n# files.\n\n[[ \"$(pwd -P)\" != \"${TARGET_DIR:?}\" ]] || (echo \"Must not execute $0 in ${TARGET_DIR:?}\" >&2; exit 1)\n\n# We wait for up to 10 minutes to get rid of duplicate host names (SYS-2790).\n# So do not give up on the lock file until 12 minutes (30 second sleep for 24\n# retries).  Reset the lock after 13 minutes.\n\nlock_message=\"$(lockfile -30 -r 24 -l 780 ${LOCK} 2>&1)\"\nif [[ -n \"$lock_message\" ]]\nthen\n  echo \"Error: $lock_message\" >&2\n  logger \"Error: $lock_message\"\n  if [[ ! \"$lock_message\" =~ 'Forcing lock on' ]]\n  then\n    exit 1\n  fi\nfi\n\n# Do we need to reload anything?\n\nreload=0\n\ncompare_and_update_file() {\n  ret=0\n  diff -I '; serial' $1 $TARGET_DIR/$1 > /dev/null 2>&1 || ret=$?\n  if [ $ret -ne 0 ]\n  then\n    sed -e \"s/SERIAL/${SERIAL}/\" < $1 > $TARGET_DIR/$1.new\n    chown root.named $TARGET_DIR/$1.new\n    chmod 0640 $TARGET_DIR/$1.new\n    reload=1\n  fi\n}\n\ninstall_file() {\n  if [[ -e $TARGET_DIR/$1.new ]]\n  then\n    /bin/mv $TARGET_DIR/$1.new $TARGET_DIR/$1\n  fi\n}\n\nheader() {\n  cat > $file << EODATA\n\\$TTL 60\n@ IN SOA util1.${bind_zone}. root.${bind_zone}. (\n  SERIAL  ; serial\n  1h 1h 2w 30)\nEODATA\n\n  for i in $name_servers\n  do\n    echo \"@ IN NS $i.${bind_zone}.\" >> $file\n  done\n}\n\ndeclare -A aliases\n\nrefresh_zones() {\n\n  # Build up the zone and reverse files from a standard header and the list of\n  # running hosts.\n  #\n  # We must have A records for the name servers, even if they are not running\n  # yet.  Without them, bind will not load the zone.  Strip out any records for\n  # the name servers and add the required entries to ensure we have the\n  # required set with no duplicates.\n\n  set -e\n\n  (\n    aws ec2 describe-instances \\\n      --region=${VPCRegion} \\\n      --filters Name=instance-state-name,Values=running \\\n      --query 'Reservations[].Instances[].[Tags[?Key==`Name`].Value | [0], PrivateIpAddress]' \\\n      --output text | \\\n      tr '[A-Z]' '[a-z]' | \\\n   LANG=C sort |\n (set +e; grep -v '^'util1'\\>' | grep -v '^'util2'\\>'; true)\n    echo -e \"util1\\t${VPCNameServer1}\"\n    echo -e \"util2\\t${VPCNameServer2}\"\n  ) > instances\n\n  awk -F$'\\t' '$1 ~ /[^a-z0-9-]/{print \"Invalid hostname \" $1 \" in '${VPCAccountName}', region '${VPCRegion}'\" > \"/dev/stderr\"; next}{print $0 \" A\"}' < instances 2> invalid > valid\n\n  # Report any invalid hostnames but keep going with what we have.  Otherwise\n  # we could end up with no name servers.\n\n  if [ -s invalid ]\n  then\n    while read msg\n    do\n      echo $msg >&2\n      logger Error: $msg\n    done < invalid\n  fi\n\n  # Create the zone resource record set.  Start with SOA, NS records, maybe MX\n  # records then the hosts.\n  #\n  # If there are servers like 'mailX' and there is no server just called 'mail'\n  # then add a set of entries for server 'mail' pointing at the IP address of\n  # each of the 'mailX' servers.  The postfix configuration in AWS (see Puppet\n  # in AWS) assumes that we have a server called 'mail', this gives AWS Postfix\n  # the ability to send email via any working 'mailX' server.\n  #\n  # As a fallback, if there are no mail servers in a region, use 10.1.161.13\n  # and 10.1.163.112 (Office mail servers).\n\n  file=zone.${bind_zone}\n  tmp_file=.tmp_${file:?}\n  header\n\n  mail_servers_name=$(awk '/^mail/{print $1}' < valid)\n  mail_servers_ip=$(awk '/^mail/{print $2}' < valid)\n  add_mail_set=1\n  if [[ -z \"$mail_servers_ip\" ]]\n  then\n    mail_servers_ip=\"10.1.161.13 10.1.163.112\"\n  fi\n  for name in $mail_servers_name\n  do\n    echo \"@ IN MX 0 $name\" >> $file\n    if [[ \"$name\" == \"mail\" ]]\n    then\n      add_mail_set=0\n    fi\n  done\n  if [[ $add_mail_set -eq 1 ]]\n  then\n    aliases[mail]=1\n    for ip in $mail_servers_ip\n    do\n      echo \"mail IN A $ip\" >> $file\n    done\n  fi\n\n  # Now add DNS entries for AWS resources that have IPs and where AWS control\n  # the resource name.  SYS-2846.\n\n  : > ${tmp_file:?}\n\n  # aws elasticache describe-replication-groups produces output like this:\n  #\n  # <ReplicationGroupId> - single field with no label\n  # NODEGROUPS <NodeGroupId> <AutomaticFailover>\n  # NODEGROUPMEMBERS <CacheClusterId> <CacheNodeId> <CurrentRole> <PreferredAvailabilityZone>\n  # READENDPOINT <Address> <Port>\n  # PRIMARYENDPOINT <Address> <Port>\n  #\n  # For each ReplicationGroupId, generate a CNAME record for the primary (no\n  # suffix) and an A record for all members in the group (suffix -all).  To\n  # disambiguate these names from other resources, they are prefixed with\n  # 'redis-'.\n\n  aws elasticache describe-replication-groups \\\n    --region=${VPCRegion} \\\n    --query 'ReplicationGroups[].{Id: ReplicationGroupId, NodeGroups: NodeGroups}' \\\n    --output text | \\\n  awk '\n\n    function dns_group() {\n      if (ReplicationGroupId != \"\") {\n        if (primary != \"\") {\n          printf(\"redis-%s\\t%s.\\tCNAME\\n\", ReplicationGroupId, primary)\n        }\n        for (address in all) {\n          printf(\"redis-%s-all\\t%s\\tA\\n\", ReplicationGroupId, all[address])\n        }\n        ReplicationGroupId = \"\"\n        primary = \"\"\n        delete all\n      }\n    }\n\n    function host_to_ip(address) {\n      command = \"host \" address\n      command |& getline result\n      close(command, \"to\")\n      ip = result\n      sub(\".* \", \"\", ip)\n    }\n\n    /^NODEGROUPS/ { next }\n\n    /^NODEGROUPMEMBERS/ {\n      CacheClusterId = $2\n      CurrentRole = $4\n      next\n    }\n\n    /^READENDPOINT/ {\n      Address = $2\n      host_to_ip(Address)\n      if (CurrentRole == \"primary\") {\n        primary = tolower(Address)\n      }\n      all[Address] = ip\n      next\n    }\n\n    /^PRIMARYENDPOINT/ { next }\n\n    # Prefix not recognised, it should be the ReplicationGroupId.\n\n    {\n      if (NF == 1) {\n        # Flush the previous group, if any\n        dns_group()\n        ReplicationGroupId = tolower($1)\n        sub(\"^redis-\", \"\", ReplicationGroupId)\n        next\n      }\n    }\n\n    {\n      printf(\"Error: line not recognised: %s\\n\", $0) > \"/dev/stderr\"\n      exit 1\n    }\n\n    END {\n      dns_group()\n    }\n  ' >> ${tmp_file:?}\n\n  # aws rds describe-db-instances produces output like this:\n  #\n  # <DBName> <Address>\n  #\n  # For each DBName, generate a CNAME record for the database.  To disambiguate\n  # these names from other resources, they are prefixed with 'rds-'.\n\n  aws rds describe-db-instances \\\n    --region=${VPCRegion} \\\n    --query 'DBInstances[*].[DBName, Endpoint.Address]' \\\n    --output text | \\\n  awk '\n\n    function dns_group() {\n      if (DBName != \"\") {\n        printf(\"rds-%s\\t%s.\\tCNAME\\n\", DBName, Address)\n        DBName = \"\"\n      }\n    }\n\n    {\n      if (NF == 2) {\n        # Flush the previous group, if any\n        dns_group()\n        DBName = tolower($1)\n        sub(\"^rds-\", \"\", DBName)\n        Address = tolower($2)\n        next\n      }\n    }\n\n    {\n      printf(\"Error: line not recognised: %s\\n\", $0) > \"/dev/stderr\"\n      exit 1\n    }\n\n    END {\n      dns_group()\n    }\n  ' >> ${tmp_file:?}\n\n  # aws elb describe-load-balancers produces output like this:\n  #\n  # <LoadBalancerName> <DNSName>\n  #\n  # For each LoadBalancerName, generate a CNAME record for the DNSName.  To\n  # disambiguate these names from other resources, they are prefixed with\n  # 'elb-'.\n\n  aws elb describe-load-balancers \\\n    --region=${VPCRegion} \\\n    --query 'LoadBalancerDescriptions[*].[LoadBalancerName, DNSName]' \\\n    --output text | \\\n  awk '\n\n    function dns_group() {\n      if (LoadBalancerName != \"\") {\n        printf(\"elb-%s\\t%s.\\tCNAME\\n\", LoadBalancerName, DNSName)\n        DBName = \"\"\n      }\n    }\n\n    {\n      if (NF == 2) {\n        # Flush the previous group, if any\n        dns_group()\n        LoadBalancerName = tolower($1)\n        sub(\"^elb-\", \"\", LoadBalancerName)\n        DNSName = tolower($2)\n        next\n      }\n    }\n\n    {\n      printf(\"Error: line not recognised: %s\\n\", $0) > \"/dev/stderr\"\n      exit 1\n    }\n\n    END {\n      dns_group()\n    }\n  ' >> ${tmp_file:?}\n\n  # -all suffices can have duplicates.\n\n  for i in $(awk '$1 ~ /-all$/ { print $1 }' < ${tmp_file:?} | sort -u)\n  do\n    aliases[$i]=1\n  done\n\n  cat ${tmp_file:?} >> valid\n\n  awk '{printf(\"%s IN %s %s\\n\", $1, $3, $2)}' < valid >> $file\n\n  compare_and_update_file $file\n\n  # Create the reverse resource record set.  Start with SOA, NS records then\n  # the hosts (only from A records).\n\n  file=reverse.${VPCNetworkBase}.10\n  header\n\n  awk '$3 == \"A\" {split($2, ip, \".\"); printf(\"%s.%s IN PTR %s.'${bind_zone}'.\\n\", ip[4], ip[3], $1)}' < valid | sort -t. -k2,2n -k1,1n >> $file\n\n  compare_and_update_file $file\n}\n\n# Refresh the zones then check for duplicate A records (SYS-2790).  If there\n# are duplicate A records (excluding known aliases) then sleep for 15 seconds,\n# touch the lock file and try again.  Repeat until there are no duplicates or\n# 10 minutes has passed.\n\ngiveup=$(date -d 'now+10 minutes' '+%s')\nwhile (true)\ndo\n  refresh_zones\n  dup=\n  for name in $(awk '/ IN A/{print $1}' zone.${bind_zone} | sort | uniq -c | awk '$1 > 1{print $2}')\n  do\n    if [[ ${aliases[$name]} -ne 1 ]]\n    then\n      dup=$name\n    fi\n  done\n  if [[ -z \"$dup\" ]]\n  then\n    break\n  fi\n  if [[ $(date '+%s') -gt $giveup ]]\n  then\n    echo $(hostname) Duplicate file $name in this VPC, refusing to update DNS\n    exit 1\n  fi\n  sleep 15\n  touch ${LOCK}\ndone\n\nif [ $reload -ne 0 ]\nthen\n  ret=0\n  install_file zone.${bind_zone}\n  install_file reverse.${VPCNetworkBase}.10\n  service named reload > reload 2>&1 || ret=$?\n  if [ $ret -ne 0 ]\n  then\n    ret=0\n    service named restart > reload 2>&1 || ret=$?\n  fi\n  if [ $ret -ne 0 ]\n  then\n    msg=\"Reload/restart of named failed: $ret\"\n    echo $msg >&2\n    logger Error: $msg\n    cat reload\n    exit $ret\n  fi\nfi\n\nrm -f ${LOCK}\n\n# vim:expandtab tabstop=2 shiftwidth=2:\n"
+                  ]]
+                },
+                "mode" : "000755"
+              },
+              "/etc/sysconfig/named" : {
+                "content" : { "Fn::Join" : ["", [
+"# We do not support IPv6 at all, not even for queries.\nOPTIONS=\"-4\"\n"
+                  ]]
+                },
+                "mode" : "000644"
+              },
+              "/etc/cron.d/boot_signal_schedule" : {
+                "content" : { "Fn::Join" : ["", [
+"MAILTO = alerts@whispir.com\n\n# Send a dummy boot signal every 8 hours.  Just to pick up any hosts that have\n# been shut down and nothing has booted since then.\n\n# Some systems do not have sbin on the path :-(\n\nPATH=/sbin:/bin:/usr/sbin:/usr/bin\n\n00 */8 * * * root service boot_signal restart > /dev/null 2>&1\n"
+                  ]]
+                },
+                "mode" : "000644"
+              },
+              "/etc/init.d/boot_signal_listen" : {
+                "content" : { "Fn::Join" : ["", [
+"#!/bin/sh\n#\n# boot_signal_listen Listen for boot_signal messages\n#\n# chkconfig: 2345 09 91\n# description: Listen for boot_signal messages\n#\n### BEGIN INIT INFO\n# Provides: boot_signal_listen\n# Required-Start:\n# Required-Stop:\n# Default-Start: 2 3 4 5\n# Default-Stop: 0 1 6\n# Short-Description: Listen for boot_signal messages\n# Description: Listen for boot_signal messages.  When one arrives, run\n#              build.named.  See\n#              http://intra:8080/display/Whispir/AWS+Internal+Host+Names%2C+Domains+and+DNS+Details.\n### END INIT INFO\n\n# Source function library.\n. /etc/init.d/functions\n\nboot_signal_listen=boot_signal_listen\n\nrunning_pid() {\n  lsof -F p -i:42 | sed -ne '/^p/{s/p//;p;q;}'\n}\n\nstatus() {\n  pid=$(running_pid)\n  if [[ -n \"$pid\" ]]\n  then\n    echo \"${boot_signal_listen} (pid $pid) is running\"\n    return 0\n  else\n    echo \"${boot_signal_listen} is stopped\"\n    return 1\n  fi\n}\n\nstart() {\n  echo -n \"${boot_signal_listen}: Starting: \"\n  umask 0077      # files only accessible by root\n  (\n    nc -lk 0.0.0.0 42 |\n      while read line\n      do\n        mkdir -p /tmp/${boot_signal_listen}-$$\n        cd /tmp/${boot_signal_listen}-$$\n        build.named\n        cd /root\n        rm -rf /tmp/${boot_signal_listen}-$$\n        sleep 5         # crude rate limiting\n      done &\n  ) < /dev/null > /dev/null 2>&1\n  success; echo\n}\n\nstop() {\n  echo -n \"${boot_signal_listen}: Stopping: \"\n  pid=$(running_pid)\n  [[ -z \"$pid\" ]] || kill $pid\n  success; echo\n}\n\nrestart() {\n  stop\n  start\n}\n\ncase \"$1\" in\n  status) status; RETVAL=$?; ;;\n  start) start; RETVAL=$?; ;;\n  stop) stop; RETVAL=$?; ;;\n  restart) restart; RETVAL=$?; ;;\n  *) echo \"Usage: ${boot_signal_listen} {status|start|stop|restart}\"; RETVAL=2; ;;\nesac\n\nexit $RETVAL\n"
+                  ]]
+                },
+                "mode" : "000755"
+              },
+              "/etc/named.conf" : {
+                "content" : { "Fn::Join" : ["", [
+"options {\n  listen-on { 10.33.0.10; };\n  listen-on-v6 { none; };\n  directory \"/var/named\";\n  dump-file \"/var/named/data/cache_dump.db\";\n  statistics-file \"/var/named/data/named_stats.txt\";\n  memstatistics-file \"/var/named/data/named_mem_stats.txt\";\n  recursion yes;\n  allow-recursion { 127.0.0.1; 10.33.0.0/16; };\n  empty-zones-enable yes;\n  notify no;\n};\n\nlogging {\n  channel default_debug {\n    file \"data/named.run\";\n    severity dynamic;\n  };\n};\n\nzone \".\" IN {\n  type hint;\n  file \"named.ca\";\n};\n\nzone \"ap-southeast-1.sg1.internal\" IN {\n  type master;\n  file \"zone.ap-southeast-1.sg1.internal\";\n};\n\nzone \"33.10.in-addr.arpa\" IN {\n  type master;\n  file \"reverse.33.10\";\n};\n\n# whispir.net is an internal zone, forward to the Whispir office name servers.\n\nzone \"whispir.net\" {\n  type forward;\n  forwarders { 10.1.161.11; 10.1.163.112; };\n  forward only;\n};\n\n# Office addresses.\n\nzone \"1.10.in-addr.arpa\" {\n  type forward;\n  forwarders { 10.1.161.11; 10.1.163.112; };\n  forward only;\n};\n\n# King St addresses.\n\nzone \"50.10.in-addr.arpa\" {\n  type forward;\n  forwarders { 10.50.50.253; 10.50.50.254; };\n  forward only;\n};\n\ninclude \"/etc/named.rfc1912.zones\";\n\n# AWS uses domains \"compute.internal\", \"google.internal\" so forward those\n# requests to the local AWS name server (address 2 in the VPC).  SYS-2938\n\nzone \"compute.internal\" IN {\n  type forward;\n  forwarders { 10.33.0.2; };\n  forward only;\n};\n\nzone \"google.internal\" IN {\n  type forward;\n  forwarders { 10.33.0.2; };\n  forward only;\n};\n\n# All unknown RFC1918 addresses are forwarded to the central name servers.\n\nzone \"10.in-addr.arpa\" {\n  type forward;\n  forwarders { 10.35.0.10; 10.35.64.10; };\n  forward only;\n};\n\nzone \"16.172.in-addr.arpa\" {\n  type forward;\n  forwarders { 10.35.0.10; 10.35.64.10; };\n  forward only;\n};\n\nzone \"17.172.in-addr.arpa\" {\n  type forward;\n  forwarders { 10.35.0.10; 10.35.64.10; };\n  forward only;\n};\n\nzone \"18.172.in-addr.arpa\" {\n  type forward;\n  forwarders { 10.35.0.10; 10.35.64.10; };\n  forward only;\n};\n\nzone \"19.172.in-addr.arpa\" {\n  type forward;\n  forwarders { 10.35.0.10; 10.35.64.10; };\n  forward only;\n};\n\nzone \"20.172.in-addr.arpa\" {\n  type forward;\n  forwarders { 10.35.0.10; 10.35.64.10; };\n  forward only;\n};\n\nzone \"21.172.in-addr.arpa\" {\n  type forward;\n  forwarders { 10.35.0.10; 10.35.64.10; };\n  forward only;\n};\n\nzone \"22.172.in-addr.arpa\" {\n  type forward;\n  forwarders { 10.35.0.10; 10.35.64.10; };\n  forward only;\n};\n\nzone \"23.172.in-addr.arpa\" {\n  type forward;\n  forwarders { 10.35.0.10; 10.35.64.10; };\n  forward only;\n};\n\nzone \"24.172.in-addr.arpa\" {\n  type forward;\n  forwarders { 10.35.0.10; 10.35.64.10; };\n  forward only;\n};\n\nzone \"25.172.in-addr.arpa\" {\n  type forward;\n  forwarders { 10.35.0.10; 10.35.64.10; };\n  forward only;\n};\n\nzone \"26.172.in-addr.arpa\" {\n  type forward;\n  forwarders { 10.35.0.10; 10.35.64.10; };\n  forward only;\n};\n\nzone \"27.172.in-addr.arpa\" {\n  type forward;\n  forwarders { 10.35.0.10; 10.35.64.10; };\n  forward only;\n};\n\nzone \"28.172.in-addr.arpa\" {\n  type forward;\n  forwarders { 10.35.0.10; 10.35.64.10; };\n  forward only;\n};\n\nzone \"29.172.in-addr.arpa\" {\n  type forward;\n  forwarders { 10.35.0.10; 10.35.64.10; };\n  forward only;\n};\n\nzone \"30.172.in-addr.arpa\" {\n  type forward;\n  forwarders { 10.35.0.10; 10.35.64.10; };\n  forward only;\n};\n\nzone \"31.172.in-addr.arpa\" {\n  type forward;\n  forwarders { 10.35.0.10; 10.35.64.10; };\n  forward only;\n};\n\nzone \"168.192.in-addr.arpa\" {\n  type forward;\n  forwarders { 10.35.0.10; 10.35.64.10; };\n  forward only;\n};\n\n\nzone \"internal\" {\n  type forward;\n  forwarders { 10.35.0.10; 10.35.64.10; };\n  forward only;\n};\n"
+                  ]]
+                },
+                "mode" : "000640", "group" : "named"
+              },
+              "/etc/sysconfig/network-scripts/ifcfg-ipip50" : {
+                "content" : { "Fn::Join" : ["", [
+"TYPE=GRE\nDEVICE=ipip50\nMY_INNER_IPADDR=10.8.33.1\nMY_OUTER_IPADDR=10.33.0.10\nPEER_INNER_IPADDR=\nPEER_OUTER_IPADDR=10.50.50.1\nEC2SYNC=no\n"
+                  ]]
+                },
+                "mode" : "000644"
+              },
+              "/etc/sysconfig/network-scripts/route-ipip50" : {
+                "content" : { "Fn::Join" : ["", [
+"10.50.0.0/16 dev ipip50 table 200\n10.0.0.0/8 dev ipip50 table 200 metric 10\n172.16.0.0/12 dev ipip50 table 200 metric 10\n192.168.0.0/16 dev ipip50 table 200 metric 10\n"
+                  ]]
+                },
+                "mode" : "000644"
+              },
+              "/etc/sysconfig/network-scripts/ifcfg-ipip60" : {
+                "content" : { "Fn::Join" : ["", [
+"TYPE=IPIP\nDEVICE=ipip60\nMY_INNER_IPADDR=10.8.33.1\nMY_OUTER_IPADDR=10.33.0.10\nPEER_INNER_IPADDR=\nPEER_OUTER_IPADDR=10.60.60.1\nEC2SYNC=no\n"
+                  ]]
+                },
+                "mode" : "000644"
+              },
+              "/etc/sysconfig/network-scripts/route-ipip60" : {
+                "content" : { "Fn::Join" : ["", [
+"10.60.0.0/16 dev ipip60 table 200\n10.0.0.0/8 dev ipip60 table 200 metric 20\n172.16.0.0/12 dev ipip60 table 200 metric 20\n192.168.0.0/16 dev ipip60 table 200 metric 20\n"
+                  ]]
+                },
+                "mode" : "000644"
+              },
+              "/etc/sysconfig/network-scripts/ifcfg-ipip1" : {
+                "content" : { "Fn::Join" : ["", [
+"TYPE=IPIP\nDEVICE=ipip1\nMY_INNER_IPADDR=10.8.33.1\nMY_OUTER_IPADDR=10.33.0.10\nPEER_INNER_IPADDR=\nPEER_OUTER_IPADDR=10.1.162.1\nEC2SYNC=no\n"
+                  ]]
+                },
+                "mode" : "000644"
+              },
+              "/etc/sysconfig/network-scripts/route-ipip1" : {
+                "content" : { "Fn::Join" : ["", [
+"10.1.0.0/16 dev ipip1 table 200\n10.0.0.0/8 dev ipip1 table 200 metric 30\n172.16.0.0/12 dev ipip1 table 200 metric 30\n192.168.0.0/16 dev ipip1 table 200 metric 30\n"
+                  ]]
+                },
+                "mode" : "000644"
+              },
+              "/etc/sysconfig/network-scripts/ifcfg-ipip36" : {
+                "content" : { "Fn::Join" : ["", [
+"TYPE=IPIP\nDEVICE=ipip36\nMY_INNER_IPADDR=10.8.33.1\nMY_OUTER_IPADDR=10.33.0.10\nPEER_INNER_IPADDR=10.8.36.1\nPEER_OUTER_IPADDR=10.36.0.10\nEC2SYNC=no\n"
+                  ]]
+                },
+                "mode" : "000644"
+              },
+              "/etc/sysconfig/network-scripts/route-ipip36" : {
+                "content" : { "Fn::Join" : ["", [
+"10.36.0.0/16 dev ipip36 table 200\n"
+                  ]]
+                },
+                "mode" : "000644"
+              },
+              "/etc/sysconfig/iptables" : {
+                "content" : { "Fn::Join" : ["", [
+"*mangle\n:PREROUTING ACCEPT [0:0]\n:INPUT ACCEPT [0:0]\n:FORWARD ACCEPT [0:0]\n:OUTPUT ACCEPT [0:0]\n:POSTROUTING ACCEPT [0:0]\n-A PREROUTING                               -m comment --comment \"Start with no mark\" -j MARK --set-mark 0\n-A PREROUTING -s 10.33.0.10/32 -m mark --mark 0x0/0xf0 -m comment --comment \"src is host\" -j MARK --set-xmark 0x20/0xf0\n-A PREROUTING -d 10.33.0.10/32 -m mark --mark 0x0/0x0f -m comment --comment \"dst is host\" -j MARK --set-xmark 0x02/0x0f\n-A OUTPUT     -s 10.33.0.10/32 -m mark --mark 0x0/0xf0 -m comment --comment \"src is host\" -j MARK --set-xmark 0x20/0xf0\n-A OUTPUT     -d 10.33.0.10/32 -m mark --mark 0x0/0x0f -m comment --comment \"dst is host\" -j MARK --set-xmark 0x02/0x0f\n-A PREROUTING -s 10.33.0.0/16 -m mark --mark 0x0/0xf0 -m comment --comment \"src is VPC\" -j MARK --set-xmark 0x30/0xf0\n-A PREROUTING -d 10.33.0.0/16 -m mark --mark 0x0/0x0f -m comment --comment \"dst is VPC\" -j MARK --set-xmark 0x03/0x0f\n-A OUTPUT     -s 10.33.0.0/16 -m mark --mark 0x0/0xf0 -m comment --comment \"src is VPC\" -j MARK --set-xmark 0x30/0xf0\n-A OUTPUT     -d 10.33.0.0/16 -m mark --mark 0x0/0x0f -m comment --comment \"dst is VPC\" -j MARK --set-xmark 0x03/0x0f\n-A PREROUTING -s 10.36.0.0/16 -m mark --mark 0x0/0xf0 -m comment --comment \"src is direct outward\" -j MARK --set-xmark 0x40/0xf0\n-A PREROUTING -d 10.36.0.0/16 -m mark --mark 0x0/0x0f -m comment --comment \"dst is direct outward\" -j MARK --set-xmark 0x04/0x0f\n-A OUTPUT     -s 10.36.0.0/16 -m mark --mark 0x0/0xf0 -m comment --comment \"src is direct outward\" -j MARK --set-xmark 0x40/0xf0\n-A OUTPUT     -d 10.36.0.0/16 -m mark --mark 0x0/0x0f -m comment --comment \"dst is direct outward\" -j MARK --set-xmark 0x04/0x0f\n-A PREROUTING -s 10.50.0.0/16 -m mark --mark 0x0/0xf0 -m comment --comment \"src is direct inward\" -j MARK --set-xmark 0x60/0xf0\n-A PREROUTING -d 10.50.0.0/16 -m mark --mark 0x0/0x0f -m comment --comment \"dst is direct inward\" -j MARK --set-xmark 0x06/0x0f\n-A OUTPUT     -s 10.50.0.0/16 -m mark --mark 0x0/0xf0 -m comment --comment \"src is direct inward\" -j MARK --set-xmark 0x60/0xf0\n-A OUTPUT     -d 10.50.0.0/16 -m mark --mark 0x0/0x0f -m comment --comment \"dst is direct inward\" -j MARK --set-xmark 0x06/0x0f\n-A PREROUTING -s 10.60.0.0/16 -m mark --mark 0x0/0xf0 -m comment --comment \"src is direct inward\" -j MARK --set-xmark 0x60/0xf0\n-A PREROUTING -d 10.60.0.0/16 -m mark --mark 0x0/0x0f -m comment --comment \"dst is direct inward\" -j MARK --set-xmark 0x06/0x0f\n-A OUTPUT     -s 10.60.0.0/16 -m mark --mark 0x0/0xf0 -m comment --comment \"src is direct inward\" -j MARK --set-xmark 0x60/0xf0\n-A OUTPUT     -d 10.60.0.0/16 -m mark --mark 0x0/0x0f -m comment --comment \"dst is direct inward\" -j MARK --set-xmark 0x06/0x0f\n-A PREROUTING -s 10.1.0.0/16 -m mark --mark 0x0/0xf0 -m comment --comment \"src is direct inward\" -j MARK --set-xmark 0x60/0xf0\n-A PREROUTING -d 10.1.0.0/16 -m mark --mark 0x0/0x0f -m comment --comment \"dst is direct inward\" -j MARK --set-xmark 0x06/0x0f\n-A OUTPUT     -s 10.1.0.0/16 -m mark --mark 0x0/0xf0 -m comment --comment \"src is direct inward\" -j MARK --set-xmark 0x60/0xf0\n-A OUTPUT     -d 10.1.0.0/16 -m mark --mark 0x0/0x0f -m comment --comment \"dst is direct inward\" -j MARK --set-xmark 0x06/0x0f\n-A PREROUTING -s 10.0.0.0/8 -m mark --mark 0x0/0xf0 -m comment --comment \"src is remote inward\" -j MARK --set-xmark 0x70/0xf0\n-A PREROUTING -d 10.0.0.0/8 -m mark --mark 0x0/0x0f -m comment --comment \"dst is remote inward\" -j MARK --set-xmark 0x07/0x0f\n-A OUTPUT     -s 10.0.0.0/8 -m mark --mark 0x0/0xf0 -m comment --comment \"src is remote inward\" -j MARK --set-xmark 0x70/0xf0\n-A OUTPUT     -d 10.0.0.0/8 -m mark --mark 0x0/0x0f -m comment --comment \"dst is remote inward\" -j MARK --set-xmark 0x07/0x0f\n-A PREROUTING -s 172.16.0.0/12 -m mark --mark 0x0/0xf0 -m comment --comment \"src is remote inward\" -j MARK --set-xmark 0x70/0xf0\n-A PREROUTING -d 172.16.0.0/12 -m mark --mark 0x0/0x0f -m comment --comment \"dst is remote inward\" -j MARK --set-xmark 0x07/0x0f\n-A OUTPUT     -s 172.16.0.0/12 -m mark --mark 0x0/0xf0 -m comment --comment \"src is remote inward\" -j MARK --set-xmark 0x70/0xf0\n-A OUTPUT     -d 172.16.0.0/12 -m mark --mark 0x0/0x0f -m comment --comment \"dst is remote inward\" -j MARK --set-xmark 0x07/0x0f\n-A PREROUTING -s 192.168.0.0/16 -m mark --mark 0x0/0xf0 -m comment --comment \"src is remote inward\" -j MARK --set-xmark 0x70/0xf0\n-A PREROUTING -d 192.168.0.0/16 -m mark --mark 0x0/0x0f -m comment --comment \"dst is remote inward\" -j MARK --set-xmark 0x07/0x0f\n-A OUTPUT     -s 192.168.0.0/16 -m mark --mark 0x0/0xf0 -m comment --comment \"src is remote inward\" -j MARK --set-xmark 0x70/0xf0\n-A OUTPUT     -d 192.168.0.0/16 -m mark --mark 0x0/0x0f -m comment --comment \"dst is remote inward\" -j MARK --set-xmark 0x07/0x0f\n-A PREROUTING -m mark --mark 0x0/0xf0 -m comment --comment \"src is public\" -j MARK --set-xmark 0x10/0xf0\n-A PREROUTING -m mark --mark 0x0/0x0f -m comment --comment \"dst is public\" -j MARK --set-xmark 0x01/0x0f\n-A OUTPUT     -m mark --mark 0x0/0xf0 -m comment --comment \"src is public\" -j MARK --set-xmark 0x10/0xf0\n-A OUTPUT     -m mark --mark 0x0/0x0f -m comment --comment \"dst is public\" -j MARK --set-xmark 0x01/0x0f\nCOMMIT\n*filter\n:INPUT ACCEPT [0:0]\n:FORWARD ACCEPT [0:0]\n:OUTPUT ACCEPT [0:0]\n:filter-eth - [0:0]\n:filter-ipip - [0:0]\n:log-reject - [0:0]\n-A INPUT -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1300\n-A OUTPUT -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1300\n-A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1300\n-A INPUT -i lo+ -j ACCEPT\n-A INPUT -i eth+ -j filter-eth\n-A INPUT -i ipip+ -j filter-ipip\n-A INPUT -j log-reject\n-A FORWARD -i eth+ -j filter-eth\n-A FORWARD -i ipip+ -j filter-ipip\n-A FORWARD -j log-reject\n-A OUTPUT -o lo+ -j ACCEPT\n-A OUTPUT -o eth+ -j filter-eth\n-A OUTPUT -o ipip+ -j filter-ipip\n-A OUTPUT -j log-reject\n-A filter-eth -m mark --mark 0x12/0xff -m comment --comment \"public -> host is valid (bastion)\" -j ACCEPT\n-A filter-eth -m mark --mark 0x10/0xf0 -m comment --comment \"public -> anything else is wrong\" -j log-reject\n-A filter-eth -m mark --mark 0x20/0xf0 -m comment --comment \"host -> anywhere is valid\" -j ACCEPT\n-A filter-eth -m mark --mark 0x32/0xff -m comment --comment \"VPC -> host is valid\" -j ACCEPT\n-A filter-eth -m mark --mark 0x35/0xff -m comment --comment \"VPC -> remote outward is valid\" -j ACCEPT\n-A filter-eth -m mark --mark 0x37/0xff -m comment --comment \"VPC -> remote inward is valid\" -j ACCEPT\n-A filter-eth -m mark --mark 0x30/0xf0 -m comment --comment \"VPC -> anything else is wrong\" -j log-reject\n-A filter-eth -m mark --mark 0x42/0xff -m comment --comment \"direct outward -> host is valid\" -j ACCEPT\n-A filter-eth -m mark --mark 0x44/0xff -m comment --comment \"direct outward -> direct outward is valid\" -j ACCEPT\n-A filter-eth -m mark --mark 0x45/0xff -m comment --comment \"direct outward -> remote outward is valid\" -j ACCEPT\n-A filter-eth -m mark --mark 0x46/0xff -m comment --comment \"direct outward -> direct inward is valid\" -j ACCEPT\n-A filter-eth -m mark --mark 0x47/0xff -m comment --comment \"direct outward -> remote inward is valid\" -j ACCEPT\n-A filter-eth -m mark --mark 0x40/0xf0 -m comment --comment \"direct outward -> anything else is wrong\" -j log-reject\n-A filter-eth -m mark --mark 0x50/0xf0 -m comment --comment \"remote outward -> anything else is wrong\" -j log-reject\n-A filter-eth -m mark --mark 0x62/0xff -m comment --comment \"direct inward -> host is valid\" -j ACCEPT\n-A filter-eth -m mark --mark 0x64/0xff -m comment --comment \"direct inward -> direct outward is valid\" -j ACCEPT\n-A filter-eth -m mark --mark 0x65/0xff -m comment --comment \"direct inward -> remote outward is valid\" -j ACCEPT\n-A filter-eth -m mark --mark 0x60/0xf0 -m comment --comment \"direct inward -> anything else is wrong\" -j log-reject\n-A filter-eth -m mark --mark 0x72/0xff -m comment --comment \"remote inward -> host is valid\" -j ACCEPT\n-A filter-eth -m mark --mark 0x73/0xff -m comment --comment \"remote inward -> VPC is valid\" -j ACCEPT\n-A filter-eth -m mark --mark 0x74/0xff -m comment --comment \"remote inward -> direct outward is valid\" -j ACCEPT\n-A filter-eth -m mark --mark 0x75/0xff -m comment --comment \"remote inward -> remote outward is valid\" -j ACCEPT\n-A filter-eth -m mark --mark 0x70/0xf0 -m comment --comment \"remote inward -> anything else is wrong\" -j log-reject\n-A filter-eth -m comment --comment \"anything else is wrong\" -j log-reject\n-A filter-ipip -m mark --mark 0x10/0xf0 -m comment --comment \"public -> anything is wrong\" -j log-reject\n-A filter-ipip -m mark --mark 0x20/0xf0 -m comment --comment \"host must not be src ip on ipip\" -j log-reject\n-A filter-ipip -m mark --mark 0x30/0xf0 -m comment --comment \"VPC must not be src ip on ipip\" -j log-reject\n-A filter-ipip -m mark --mark 0x44/0xff -m comment --comment \"direct outward -> direct outward is valid\" -j ACCEPT\n-A filter-ipip -m mark --mark 0x45/0xff -m comment --comment \"direct outward -> remote outward is valid\" -j ACCEPT\n-A filter-ipip -m mark --mark 0x46/0xff -m comment --comment \"direct outward -> direct inward is valid\" -j ACCEPT\n-A filter-ipip -m mark --mark 0x47/0xff -m comment --comment \"direct outward -> remote inward is valid\" -j ACCEPT\n-A filter-ipip -m mark --mark 0x40/0xf0 -m comment --comment \"direct outward -> anything else is wrong\" -j log-reject\n-A filter-ipip -m mark --mark 0x52/0xff -m comment --comment \"remote outward -> host is valid\" -j ACCEPT\n-A filter-ipip -m mark --mark 0x53/0xff -m comment --comment \"remote outward -> VPC is valid\" -j ACCEPT\n-A filter-ipip -m mark --mark 0x54/0xff -m comment --comment \"remote outward -> direct outward is valid\" -j ACCEPT\n-A filter-ipip -m mark --mark 0x55/0xff -m comment --comment \"remote outward -> remote outward is valid\" -j ACCEPT\n-A filter-ipip -m mark --mark 0x56/0xff -m comment --comment \"remote outward -> direct inward is valid\" -j ACCEPT\n-A filter-ipip -m mark --mark 0x57/0xff -m comment --comment \"remote outward -> remote inward is valid\" -j ACCEPT\n-A filter-ipip -m mark --mark 0x50/0xf0 -m comment --comment \"remote outward -> anything else is wrong\" -j log-reject\n-A filter-ipip -m mark --mark 0x64/0xff -m comment --comment \"direct inward -> direct outward is valid\" -j ACCEPT\n-A filter-ipip -m mark --mark 0x65/0xff -m comment --comment \"direct inward -> remote outward is valid\" -j ACCEPT\n-A filter-ipip -m mark --mark 0x60/0xf0 -m comment --comment \"direct inward -> anything else is wrong\" -j log-reject\n-A filter-ipip -m mark --mark 0x72/0xff -m comment --comment \"remote inward -> host is valid\" -j ACCEPT\n-A filter-ipip -m mark --mark 0x73/0xff -m comment --comment \"remote inward -> VPC is valid\" -j ACCEPT\n-A filter-ipip -m mark --mark 0x74/0xff -m comment --comment \"remote inward -> direct outward is valid\" -j ACCEPT\n-A filter-ipip -m mark --mark 0x75/0xff -m comment --comment \"remote inward -> remote outward is valid\" -j ACCEPT\n-A filter-ipip -m mark --mark 0x70/0xf0 -m comment --comment \"remote inward -> anything else is wrong\" -j log-reject\n-A filter-ipip -m comment --comment \"anything else is wrong\" -j log-reject\n-A log-reject -m limit --limit 10/min -j LOG --log-prefix \"Illegal packet: \"\n-A log-reject -j REJECT --reject-with icmp-port-unreachable\nCOMMIT\n"
+                  ]]
+                },
+                "mode" : "000644"
+              },
+              "/etc/sysconfig/transit_routes-config" : {
+                "content" : { "Fn::Join" : ["", [
+"# The ip route table number to use for transit routes.\nTRANSIT_ROUTES_TABLE=200\n# Firewall marks to treat as transit.\nTRANSIT_ROUTES_MARKS='0x44/0xcc 0x05/0x0d'\n# Known ipip tunnels.\nTRANSIT_ROUTES_TUNNELS='50 60 1 36'\n"
+                  ]]
+                },
+                "mode" : "000644"
+              },
+              "/sbin/ifup-local" : {
+                "content" : { "Fn::Join" : ["", [
+"echo 0 > /proc/sys/net/ipv4/conf/$1/rp_filter\necho 1 > /proc/sys/net/ipv4/conf/$1/forwarding\n"
+                  ]]
+                },
+                "mode" : "000755"
+              },
+              "/etc/init.d/transit_routes" : {
+                "content" : { "Fn::Join" : ["", [
+"#!/bin/sh\n#\n# transit_routes Start the transit interfaces and routes.\n#\n# chkconfig: 2345 09 91\n# description: Starts and stops transit interfaces.\n#\n# config: /etc/sysconfig/transit_routes-config\n#\n### BEGIN INIT INFO\n# Provides: transit_routes\n# Required-Start:\n# Required-Stop:\n# Default-Start: 2 3 4 5\n# Default-Stop: 0 1 6\n# Short-Description: start and stop transit interfaces and routes\n# Description: Start and stop transit interfaces and routes\n### END INIT INFO\n\n# Source function library.\n. /etc/init.d/functions\n\nTRANSIT_ROUTES=transit_routes\nTRANSIT_ROUTES_CONFIG=/etc/sysconfig/${TRANSIT_ROUTES}-config\n\ndel_ip_rules() {\n  ip rule list | sed -ne '/ lookup '${TRANSIT_ROUTES_TABLE?}' *$/s/.*:/ip rule del/p;' | sh\n}\nadd_ip_rules() {\n  set -e\n  for m in ${TRANSIT_ROUTES_MARKS?}\n  do\n    ip rule add fwmark $m table ${TRANSIT_ROUTES_TABLE?}\n  done\n}\ndead() {\n  alive=\"^($(echo $TRANSIT_ROUTES_TUNNELS | tr ' ' '|'))\\$\"\n  while [ -n \"$1\" ]\n  do\n    filter=$(echo \"$1\" | egrep -v \"$alive\" || true)\n    case $filter in\n      '') ;;\n      *) echo $1; ;;\n    esac\n    shift\n  done\n}\ntunnels() {\n  cd /etc/sysconfig/network-scripts\n  echo $(ls $1-ipip* | sed -e '/\\.bak/d; s/.*-ipip//;')\n}\ncleanup() {\n  cd /etc/sysconfig/network-scripts\n  d=\"$(echo $(dead $(tunnels $1)))\"\n  for i in $d\n  do\n    if [ -e ifcfg-ipip$i ]\n    then\n      ifdown ipip$i\n    fi\n    rm -f $1-ipip$i{,.bak}\n  done\n  rm -f *-ipip*.bak\n}\n\nstart() {\n  # Do not start if there is no config file.\n  [ ! -f \"$TRANSIT_ROUTES_CONFIG\" ] && return 6\n  (\n    set -e\n    source \"$TRANSIT_ROUTES_CONFIG\"\n    echo -n \"${TRANSIT_ROUTES}: Starting: \"\n    del_ip_rules\n    add_ip_rules\n    cleanup ifcfg\n    cleanup route\n    declare -A up\n    for i in $(ifconfig | sed -rne '/^ipip[0-9]+\\>/{s/\\s.*//; s/ipip//; p;}')\n    do\n      up[$i]=1\n    done\n    for i in $(tunnels ifcfg)\n    do\n      [ \"${up[$i]}\" == '1' ] || ifup ipip$i\n    done\n  )\n  if [ $? -eq 0 ]; then\n    success; echo\n  else\n    failure; echo; return 1\n  fi\n}\n\nstop() {\n  # Do not stop if there is no config file.\n  [ ! -f \"$TRANSIT_ROUTES_CONFIG\" ] && return 6\n  (\n    set -e\n    source \"$TRANSIT_ROUTES_CONFIG\"\n    echo -n \"${TRANSIT_ROUTES}: Stopping: \"\n    del_ip_rules\n    for i in $(tunnels ifcfg)\n    do\n      ifdown ipip$i\n    done\n  )\n  if [ $? -eq 0 ]; then\n      success; echo\n  else\n      failure; echo; return 1\n  fi\n}\n\nrestart() {\n  stop\n  start\n}\n\ncase \"$1\" in\n  start) start; RETVAL=$?; ;;\n  stop) stop; RETVAL=$?; ;;\n  restart|force-reload) restart; RETVAL=$?; ;;\n  *) echo \"Usage: ${TRANSIT_ROUTES} {start|stop|restart}\"; RETVAL=2; ;;\nesac\n\nexit $RETVAL\n"
+                  ]]
+                },
+                "mode" : "000755"
+              },
+              "/etc/sysctl.d/60-util.conf" : {
+                "content" : { "Fn::Join" : ["", [
+"net.ipv4.conf.default.rp_filter = 0\nnet.ipv4.conf.all.rp_filter = 0\nnet.ipv4.conf.default.forwarding = 1\nnet.ipv4.conf.all.forwarding = 1\n"
+                  ]]
+                },
+                "mode" : "000644"
+              }
+            },
+            "commands" : {
+              "300" : {
+                "command" : "build.named",
+                "cwd" : "/tmp",
+                "ignoreErrors" : "true"
+              },
+              "310" : {
+                "command" : "for i in $(find /proc/sys -name rp_filter); do echo 0 > $i; done"
+              },
+              "320" : {
+                "command" : "for i in $(find /proc/sys -name forwarding); do echo 1 > $i; done"
+              }
+            },
+            "services" : {
+              "sysvinit" : {
+                "crond" : {
+                  "enabled" : "true",
+                  "ensureRunning" : "true"
+                },
+                "iptables" : {
+                  "enabled" : "true",
+                  "files" : [ "/etc/sysconfig/iptables" ]
+                },
+                "transit_routes" : {
+                  "enabled" : "true",
+                  "files" : [ "/etc/init.d/transit_routes", "/etc/sysconfig/transit_routes-config" ]
+                },
+                "named" : {
+                  "enabled" : "true",
+                  "files" : [ "/etc/named.conf", "/usr/bin/build.named", "/etc/sysconfig/named" ]
+                },
+                "boot_signal" : {
+                  "enabled" : "true",
+                  "files" : [ "/etc/named.conf", "/usr/bin/build.named", "/etc/init.d/boot_signal" ]
+                },
+                "boot_signal_listen" : {
+                  "enabled" : "true",
+                  "files" : [ "/usr/bin/build.named", "/etc/init.d/boot_signal_listen" ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "Properties" : {
+        "InstanceType" : "t2.micro",
+        "DisableApiTermination" : "false",
+        "KeyName"  : { "Ref" : "KeyPairName" },
+        "SourceDestCheck" : "false",
+        "ImageId" : "ami-1b9e4a78",
+        "IamInstanceProfile" : "ec2-util-InstanceProfile-ZXEUNBF01HP3",
+        "NetworkInterfaces" : [{
+          "GroupSet"                 : [ "sg-4ca4fe29", "sg-34ed9051", "sg-cea006aa" ],
+          "AssociatePublicIpAddress" : "true",
+          "DeviceIndex"              : "0",
+          "DeleteOnTermination"      : "true",
+          "PrivateIpAddress"         : "10.33.0.10",
+          "SubnetId"                 : "subnet-742b9303"
+        }],
+        "Tags" : [
+          { "Key" : "Name", "Value" : "util1" }
+        ],
+"UserData": "Q29udGVudC1UeXBlOiBtdWx0aXBhcnQvbWl4ZWQ7IGJvdW5kYXJ5PSI9PT09PT09PT09PT09PT11dGlsMT09IgpNSU1FLVZlcnNpb246IDEuMAoKLS09PT09PT09PT09PT09PT11dGlsMT09CkNvbnRlbnQtVHlwZTogdGV4dC9jbG91ZC1jb25maWc7IGNoYXJzZXQ9InVzLWFzY2lpIgpNSU1FLVZlcnNpb246IDEuMApDb250ZW50LVRyYW5zZmVyLUVuY29kaW5nOiA3Yml0CkNvbnRlbnQtRGlzcG9zaXRpb246IGF0dGFjaG1lbnQ7IGZpbGVuYW1lPSJjbG91ZC1jb25maWciCgojY2xvdWQtY29uZmlnCgpzc2hfcHdhdXRoOiB0cnVlCmZxZG46IHV0aWwxLmFwLXNvdXRoZWFzdC0xLnNnMS5pbnRlcm5hbAoKLS09PT09PT09PT09PT09PT11dGlsMT09CkNvbnRlbnQtVHlwZTogdGV4dC94LXNoZWxsc2NyaXB0OyBjaGFyc2V0PSJ1cy1hc2NpaSIKTUlNRS1WZXJzaW9uOiAxLjAKQ29udGVudC1UcmFuc2Zlci1FbmNvZGluZzogN2JpdApDb250ZW50LURpc3Bvc2l0aW9uOiBhdHRhY2htZW50OyBmaWxlbmFtZT0iYm9vdC1zY3JpcHQiCgojIS9iaW4vYmFzaCAteAojIEluc3RhbGwgdGhlIGZpbGVzIGFuZCBwYWNrYWdlcyBmcm9tIHRoZSBtZXRhZGF0YQovb3B0L2F3cy9iaW4vY2ZuLWluaXQgLXYgLS1zdGFjayBhcC1zb3V0aGVhc3QtMS11dGlsLWluc3RhbmNlLTEgLS1yZXNvdXJjZSB1dGlsMSAtLXJlZ2lvbiBhcC1zb3V0aGVhc3QtMQojIFNpZ25hbCB0aGUgc3RhdHVzIGZyb20gY2ZuLWluaXQKL29wdC9hd3MvYmluL2Nmbi1zaWduYWwgLWUgJD8gLS1zdGFjayBhcC1zb3V0aGVhc3QtMS11dGlsLWluc3RhbmNlLTEgLS1yZXNvdXJjZSB1dGlsMSAtLXJlZ2lvbiBhcC1zb3V0aGVhc3QtMQoKLS09PT09PT09PT09PT09PT11dGlsMT09LS0K"
+      }
+    },
+    "PrivateRouteutil10A00000008" : {
+      "DependsOn" : ["util1"],
+      "Type" : "AWS::EC2::Route",
+      "Properties" : {
+        "RouteTableId" : "rtb-f876e19d",
+        "DestinationCidrBlock" : "10.0.0.0/8",
+        "InstanceId" : { "Ref" : "util1" }
+      }
+    },
+    "PublicRouteutil10A00000008" : {
+      "DependsOn" : ["util1"],
+      "Type" : "AWS::EC2::Route",
+      "Properties" : {
+        "RouteTableId" : "rtb-fa76e19f",
+        "DestinationCidrBlock" : "10.0.0.0/8",
+        "InstanceId" : { "Ref" : "util1" }
+      }
+    },
+    "PrivateRouteutil1AC1000000C" : {
+      "DependsOn" : ["util1"],
+      "Type" : "AWS::EC2::Route",
+      "Properties" : {
+        "RouteTableId" : "rtb-f876e19d",
+        "DestinationCidrBlock" : "172.16.0.0/12",
+        "InstanceId" : { "Ref" : "util1" }
+      }
+    },
+    "PublicRouteutil1AC1000000C" : {
+      "DependsOn" : ["util1"],
+      "Type" : "AWS::EC2::Route",
+      "Properties" : {
+        "RouteTableId" : "rtb-fa76e19f",
+        "DestinationCidrBlock" : "172.16.0.0/12",
+        "InstanceId" : { "Ref" : "util1" }
+      }
+    },
+    "PrivateRouteutil1C0A8000010" : {
+      "DependsOn" : ["util1"],
+      "Type" : "AWS::EC2::Route",
+      "Properties" : {
+        "RouteTableId" : "rtb-f876e19d",
+        "DestinationCidrBlock" : "192.168.0.0/16",
+        "InstanceId" : { "Ref" : "util1" }
+      }
+    },
+    "PublicRouteutil1C0A8000010" : {
+      "DependsOn" : ["util1"],
+      "Type" : "AWS::EC2::Route",
+      "Properties" : {
+        "RouteTableId" : "rtb-fa76e19f",
+        "DestinationCidrBlock" : "192.168.0.0/16",
+        "InstanceId" : { "Ref" : "util1" }
+      }
+    }
+  },
+  "Outputs" : {
+    "UtilInstanceId1" : {
+      "Description" : "Util instance id",
+      "Value" : { "Ref" : "util1" }
+    },
+    "UtilIPPublic1" : {
+      "Description" : "Util IP address",
+      "Value" : { "Fn::GetAtt" : [ "util1", "PublicIp" ] }
+    }
+  }
+}

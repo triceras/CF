@@ -1,0 +1,144 @@
+#!/bin/bash
+
+# Generate the routing data for a VPC.  It also creates clouds that update the
+# routing tables for each peer of this VPC.  Each peer has a separate cloud,
+# mainly to document the peering relationships in CF.  Without those clouds, it
+# is easy to forget about peers when you are removing a VPN.
+#
+# The calling environment must contain the required credentials for the target
+# account.
+#
+# Parameters are:
+#   Region.
+#   VPC stack name.
+#   Name of hub account, empty for a hub.
+
+set -e
+set -o pipefail
+
+region=${1:?"Missing region name"}
+vpc_stack_name=${2:?"Missing VPC stack name"}
+hub_name=$3
+shift 3
+
+source ./functions
+
+# Get outputs from the stacks we depend on.
+
+get_vpc_data ${vpc_stack_name:?}
+
+tmp_file=/tmp/generate-routing-$$.tmp
+
+# First delete the local copy of all the cloud templates for peers of this
+# account.  This is the easiest way to remove templates for peers that no
+# longer exist.  The next step will generate all the clouds that still exist.
+
+rm -f generated/${account:?}/stack-${region}-peer-*
+
+if [[ -n "$hub_name" ]]
+then
+	# Spokes make requests to hubs
+	from=requester
+	to=AccepterVpcInfo
+else
+	# Hubs accept requests from spokes
+	from=accepter
+	to=RequesterVpcInfo
+fi
+
+# Get information about all my active peers
+
+aws ec2 describe-vpc-peering-connections --region=$region \
+	--filters Name=${from}-vpc-info.vpc-id,Values=${VPCID:?} Name=status-code,Values=active \
+	--query "VpcPeeringConnections[*].[${to}.OwnerId, ${to}.CidrBlock, VpcPeeringConnectionId]" \
+	--output text > $tmp_file
+
+direct_outward=
+direct_inward=
+
+# All accounts get these remote inward routes.
+
+remote_inward=$rfc1918
+
+if [[ ! -s $tmp_file ]]
+then
+	echo "No peering accounts attached to $account"
+else
+	while read ownerid cidr connectionid
+	do
+		if [[ "$cidr" =~ ^10.([0-9]+)\.0\.0/16$ ]]
+		then
+			r=${BASH_REMATCH[1]}
+			if [[ -n "$hub_name" ]]
+			then
+				# This account has a hub so it is a spoke
+				direct_inward="$direct_inward '$r "'10.$id.$base.10 10.8.$id.$zone_number 10.$id.0.0/16'"'"
+			else
+				# This account is a hub so the peer is a spoke
+				direct_outward="$direct_outward '$r "'10.$id.$base.10 10.8.$id.$zone_number 10.$id.0.0/16'"'"
+			fi
+		else
+			echo "Cannot handle peering route $cidr to $ownerid ($(./map-account-name $ownerid))"
+			exit 1
+		fi
+	done < $tmp_file
+fi
+
+if [[ -z "$hub_name" ]]
+then
+	# Hubs are assumed to have VPNs for these networks with IPIP tunnels on
+	# these addresses.  Default routes will go over these VPNs in the order
+	# that they are listed, King St, Nepean DR, office.
+	direct_inward="'50 10.50.50.1 \"\" 10.50.0.0/16' '60 10.60.60.1 \"\" 10.60.0.0/16' '1 10.1.162.1 \"\" 10.1.0.0/16'"
+fi
+
+json_fragment << EODATA
+direct_outward=(${direct_outward/# /})
+direct_inward=(${direct_inward/# /})
+remote_inward=($remote_inward)
+EODATA
+
+refresh_file "$JSON_FILE" generated/${account:?}/routing-$region
+
+# Now generate and run the clouds to add routing to my peers.
+
+while read ownerid cidr connectionid
+do
+	peer_account_name=$(./map-account-name $ownerid)
+	echo "Adding peer route from $account to ${peer_account_name:?}"
+	: > "$JSON_FILE"
+
+	json_fragment << EODATA
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "Define the peer routes from $account to $peer_account_name",
+
+  "Resources" : {
+EODATA
+
+	for rti in $(routing_table_ids)
+	do
+		r=${rti/-/}
+		json_fragment << EODATA
+    "PeerRoute$r" : {
+      "Type" : "AWS::EC2::Route",
+      "Properties" : {
+	"RouteTableId" : "$rti",
+	"DestinationCidrBlock" : "$cidr",
+	"VpcPeeringConnectionId" : "$connectionid"
+      }
+    },
+EODATA
+	done
+
+	json_fragment << 'EODATA'
+  }
+}
+EODATA
+
+	stack_name=${region}-peer-${peer_account_name:?}
+	build_stack
+done < $tmp_file
+
+rm $tmp_file

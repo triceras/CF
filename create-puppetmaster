@@ -1,0 +1,361 @@
+#!/bin/bash
+
+# Create or update a puppet master instance.
+#
+# The calling environment must contain the required credentials for the target
+# account.
+#
+# Parameters are:
+#   Region.
+#   My stack name.
+#   VPC stack name.
+#   Common security stack name.
+#   Zone number for this instance.
+#   Host name.
+#   Security group name for this puppet master.
+#   IP ranges that can talk to this puppet master.
+
+set -e
+set -o pipefail
+
+region=${1:?"Missing region name"}
+STACK_NAME=${2:?"Missing stack name"}
+vpc_stack_name=${3:?"Missing VPC stack name"}
+common_security_stack_name=${4:?"Missing common security stack name"}
+zone_number=${5:?"Missing zone number"}
+host_name=${6:?"Missing host name"}
+security_group_name=${7:?"Missing security group name"}
+ip_ranges=${8:?"Missing IP ranges"}
+shift 8
+
+export operatingsystem=RHEL
+
+source ./functions
+
+get_vpc_data ${vpc_stack_name:?}
+eval $(stack_outputs $common_security_stack_name)
+
+resource=puppet
+zone_Suffix=$(zone_number_to_Suffix ${zone_number:?})
+image_id=$(./choose-ami ${resource:?} generated/${account:?}/stack-${stack_name:?} ${region:?} generated/rhel7-golden-list)
+
+# If we rebuild the puppet master we want to keep some of the data.  Create a
+# persistent volume to hold this data.
+
+./create-persistent-volume ${region:?} ${stack_name:?}-volume ${zone_number:?} ${host_name:?}-persistent 6
+eval $(stack_outputs ${stack_name:?}-volume)
+
+json_fragment << 'EODATA'
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "Define a puppetmaster instance",
+
+  "Parameters" : {
+EODATA
+
+json_fragment < keypairname
+
+json_fragment << 'EODATA'
+  },
+
+  "Resources" : {
+EODATA
+
+sg ${security_group_name} 'Puppet master ingress'
+for range in $ip_ranges
+do
+	ipingress ${security_group_name} 8140 $range		# Puppet clients use 8140
+done
+
+json_fragment << EODATA
+    "$resource" : {
+      "Type" : "AWS::EC2::Instance",
+      "CreationPolicy" : {
+	"ResourceSignal" : {
+	  "Timeout" : "PT20M"
+	}
+      },
+
+      "Metadata" : {
+	"AWS::CloudFormation::Init" : {
+
+	  "configSets" : {
+	    "default"    : [ "base", "puppetrole", "puppetrepo", "puppetmaster", "puppetagent" ]
+	  },
+EODATA
+
+EXISTING_JSON_FILE=${JSON_FILE} ./configset-base $resource $host_name
+
+puppetrole puppetmaster
+puppetrepo
+
+json_fragment << 'EODATA'
+
+	  "puppetmaster" : {
+	    "packages" : {
+	      "yum" : {
+		"puppet-server" : [],
+		"cronie" : [],
+		"git" : [],
+		"procmail" : []
+	      }
+	    },
+	    "files" : {
+EODATA
+
+fixed_file /etc/puppet/autosign.conf 000644
+fixed_file /etc/puppet/hiera.yaml 000644
+(
+
+	# Use puppet.conf from puppetagent plus a master specific section.
+	# Make sure that puppet/aws creates the same contents for the
+	# puppetmaster.
+
+	cat etc/puppet/puppet.conf.CF
+	cat << 'EODATA'
+
+[master]
+    environmentpath = /var/puppet/environments
+    hiera_config = /etc/puppet/hiera.yaml
+    autosign = true
+    #TEMP
+    environment_timeout = 0
+    # storeconfigs = true
+    # storeconfigs_backend = puppetdb
+
+    parser = future
+EODATA
+) | add_file /etc/puppet/puppet.conf.CF 0644
+fixed_file /home/puppetmaster_puppet_aws/.ssh/id_rsa 000600
+fixed_file /home/puppetmaster_puppet_aws/.ssh/id_rsa.pub 000600
+fixed_file /home/puppetmaster_puppet_aws/.ssh/config 000600
+
+json_fragment << 'EODATA'
+	    # end of files
+	    },
+	    "commands" : {
+
+	      # /dev/xvdc holds the persistent data for the puppet master.  It
+	      # is used for /var/lib/puppet and /var/puppet.  CF does not
+	      # format the volume so do it at boot time.  Mount the volume,
+	      # create the required directories and bind mount them.
+
+	      "100" : {
+	        "command" : "mkfs.xfs /dev/xvdc",
+		"test" : "test \"$(file - < /dev/xvdc)\" == '/dev/stdin: data'"
+	      },
+
+	      "110" : {
+	        "command" : "mkdir -p /mnt/persistent-1"
+	      },
+
+	      "120" : {
+	        "command" : "echo '/dev/xvdc /mnt/persistent-1 xfs defaults 0 2' >> /etc/fstab",
+                "test" : "! grep -q ' /mnt/persistent-1 ' /etc/fstab"
+	      },
+
+	      "130" : {
+	        "command" : "mount /mnt/persistent-1",
+                "test" : "! mount | grep -q ' /mnt/persistent-1 '"
+	      },
+
+	      "140" : {
+	        "command" : "mkdir -p /var/puppet /var/lib/puppet /mnt/persistent-1/var/puppet /mnt/persistent-1/var/lib/puppet"
+	      },
+
+	      "150" : {
+	        "command" : "chown puppet.puppet /mnt/persistent-1/var/puppet /mnt/persistent-1/var/lib/puppet"
+	      },
+
+	      "160" : {
+	        "command" : "echo '/mnt/persistent-1/var/lib/puppet /var/lib/puppet none bind 0 0' >> /etc/fstab",
+                "test" : "! grep -q ' /var/lib/puppet ' /etc/fstab"
+	      },
+
+	      "170" : {
+	        "command" : "mount /var/lib/puppet",
+                "test" : "! mount | grep -q ' /var/lib/puppet '"
+	      },
+
+	      "180" : {
+	        "command" : "echo '/mnt/persistent-1/var/puppet /var/puppet none bind 0 0' >> /etc/fstab",
+                "test" : "! grep -q ' /var/puppet ' /etc/fstab"
+	      },
+
+	      "190" : {
+	        "command" : "mount /var/puppet",
+                "test" : "! mount | grep -q ' /var/puppet '"
+	      },
+
+	      # I cannot get AWS::CloudFormation::Init 'users' to work.  If I
+	      # use 'group' to create the user's group first then useradd
+	      # complains that the group already exists.  If I do not create
+	      # the group with 'groups' then useradd complains that the group
+	      # does not exist.  Can't win.  Add the user via an explicit
+	      # command instead.
+
+	      "200" : {
+	        "command" : "useradd -U -r -s /bin/bash puppetmaster_puppet_aws",
+		"test" : "! grep -q '^puppetmaster_puppet_aws:' /etc/passwd"
+	      },
+
+	      # Make the puppetmaster production directory.  For some reason
+	      # this creates /var/puppet/environments with mode 0777 so dial it
+	      # back to something sensible.
+
+	      "300" : {
+	        "command" : "mkdir -p /var/puppet/environments/branches /var/puppet/environments/mirrors"
+	      },
+	      "310" : {
+	        "command" : "chmod 0755 /var/puppet/environments /var/puppet/environments/branches /var/puppet/environments/mirrors"
+	      },
+
+	      # Make sure that all of ~puppetmaster_puppet_aws is owned by
+	      # puppetmaster_puppet_aws and the .ssh directory has the correct
+	      # permissions.  Also puppetmaster_puppet_aws needs to own the
+	      # directories that it clones into.
+
+	      "400" : {
+	        "command" : "chown -R puppetmaster_puppet_aws.puppetmaster_puppet_aws /home/puppetmaster_puppet_aws"
+	      },
+	      "410" : {
+	        "command" : "chmod 0700 /home/puppetmaster_puppet_aws/.ssh"
+	      },
+	      "420" : {
+	        "command" : "chown -R puppetmaster_puppet_aws.puppetmaster_puppet_aws /var/puppet"
+	      },
+
+	      # SYS-3030
+	      #
+	      # Mirror from Gitlab into the puppetmaster mirrors/puppet_aws
+	      # directory if there is no Git repository in that directory.
+	      #
+	      # Clone from the mirror into puppetmaster branches/master
+	      # directory if there is no Git repository in that directory.
+	      #
+	      # There are ssh config options under ~puppetmaster_puppet_aws to
+	      # take care of the "do you want to connect to this server?"
+	      # problems.
+	      #
+	      # Create a symlink for environment production pointing at
+	      # branches/master.  Puppet agents run off the master branch by
+	      # default.
+
+	      "500" : {
+	        "command" : "su - puppetmaster_puppet_aws -c 'git clone --mirror git@git.whispir.net:puppet/aws.git /var/puppet/environments/mirrors/puppet_aws'",
+		"test" : "test ! -e /var/puppet/environments/mirrors/puppet_aws/config"
+	      },
+
+	      "510" : {
+	        "command" : "su - puppetmaster_puppet_aws -c 'git clone /var/puppet/environments/mirrors/puppet_aws /var/puppet/environments/branches/master'",
+		"test" : "test ! -e /var/puppet/environments/branches/master/.git"
+	      },
+
+	      "520" : {
+	        "command" : "su - puppetmaster_puppet_aws -c 'ln -s branches/master /var/puppet/environments/production'",
+		"test" : "test ! -L /var/puppet/environments/production"
+	      },
+
+	      # Puppet agents use uuid for the certname to avoid duplicate
+	      # certificates when a server is deleted and redefined.  Insert
+	      # the uuid from facter into /etc/puppet/puppet.conf for the
+	      # puppetmaster.  certname requires lower case values.
+
+	      "600" : {
+	        "command" : "cp -a /etc/puppet/puppet.conf.CF /etc/puppet/puppet.conf; uuid=$(facter uuid); sed -i -e s'/<%= @uuid[^>]*>/'${uuid,,}'/' /etc/puppet/puppet.conf",
+                "test" : "! grep -q '^\\s*server\\>' /etc/puppet/puppet.conf"
+	      },
+
+	      # The manifests need the Puppet stdlib and concat which have to
+	      # be present before the first puppet run.
+
+	      "700" : {
+	        "command" : "puppet module install puppetlabs-stdlib",
+		"test" : "test ! -d /etc/puppet/modules/stdlib"
+	      },
+
+	      "701" : {
+	        "command" : "puppet module install puppetlabs-concat",
+		"test" : "test ! -d /etc/puppet/modules/concat"
+	      },
+
+	      "702" : {
+	        "command" : "puppet module install puppetlabs-postgresql",
+		"test" : "test ! -d /etc/puppet/modules/postgresql"
+	      },
+
+	      "703" : {
+	        "command" : "puppet module install puppetlabs-lvm",
+		"test" : "test ! -d /etc/puppet/modules/lvm"
+	      },
+
+	      # There are minor differences in the user definitions between
+	      # environments.  The easiest way to handle those differences is
+	      # to store most of the settings in one file with overrides to the
+	      # individual fields of a user at the fqdn or domain level.
+	      # Overriding individual fields is a deep merge in Hiera so it
+	      # requires the Hiera :merge_behavior: deeper setting, which in
+	      # turn requires the Ruby deep_merge gem.
+
+	      "710" : {
+	        "command" : "gem install deep_merge",
+		"test" : "! gem list | fgrep -q deep_merge"
+	      },
+
+EODATA
+
+json_fragment << 'EODATA'
+	    # End of commands
+	    },
+	    "services" : {
+	      "sysvinit" : {
+	        "puppetmaster" : {
+		  "enabled" : "true",
+		  "ensureRunning" : "true"
+		}
+	      }
+	    }
+	  },
+EODATA
+
+puppetagent 1
+
+json_fragment << 'EODATA'
+	# End of AWS::CloudFormation::Init
+	}
+      # End of Metadata
+      },
+EODATA
+
+json_fragment << EODATA
+
+      "Properties" : {
+        "InstanceType" : "t2.micro",
+	"DisableApiTermination" : "false",
+        "KeyName"  : { "Ref" : "KeyPairName" },
+        "ImageId" : "${image_id:?}",
+        "NetworkInterfaces" : [{
+          "GroupSet"                 : [ "${SECCommonInternal:?}", "${SECPuppetMasterServer:?}", { "Ref" : "${security_group_name:?}" } ],
+          "DeviceIndex"              : "0",
+          "DeleteOnTermination"      : "true",
+          "SubnetId"                 : "$(eval echo \${VPCPrivateSubnet$zone_Suffix:?})"
+        }],
+	"Volumes" : [
+	  { "VolumeId" : "${VolumeId:?}", "Device" : "/dev/sdc" }
+	],
+        "Tags" : [
+          { "Key" : "Name", "Value" : "$host_name" }
+        ],
+EODATA
+
+./userdata-rhel7-golden ${resource:?} ${host_name:?} ${stack_name:?} | json_fragment
+
+json_fragment << 'EODATA'
+      }
+    }
+  }
+}
+EODATA
+
+build_stack

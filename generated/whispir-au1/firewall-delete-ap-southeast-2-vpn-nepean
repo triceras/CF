@@ -1,0 +1,11 @@
+delete security zones security-zone Trusted interfaces st0.3220
+delete interfaces st0.3220
+delete security ipsec vpn aws-au1-2
+delete security ike gateway gw-aws-au1-2
+delete security ike policy ike-pol-aws-au1-2
+delete security zones security-zone Trusted interfaces st0.3210
+delete routing-options static route 10.32.0.0/16
+delete interfaces st0.3210
+delete security ipsec vpn aws-au1-1
+delete security ike gateway gw-aws-au1-1
+delete security ike policy ike-pol-aws-au1-1

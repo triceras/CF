@@ -1,0 +1,57 @@
+#!/bin/bash
+
+# Generate a list of AMI version by region and version.  This is a plain text
+# list, not a JSON map.
+#
+# The calling environment must contain the required credentials for the target
+# account.
+#
+# Parameters are:
+#   AMI prefix.
+#   AMI owner (account number).
+
+set -e
+set -o pipefail
+
+ami_prefix=${1:?"Missing AMI prefix"}
+ami_owner=${2:?"Missing AMI owner"}
+shift 2
+
+echo '# region version image_id'
+
+# The list looks like:
+#
+# <region1> <version1> <ami-xxxxxx>
+# <region1> <version2> <ami-xxxxxx>
+# <region1> latest <ami-xxxxxx>
+# <region2> <version1> <ami-xxxxxx>
+# <region2> <version2> <ami-xxxxxx>
+# <region2> latest <ami-xxxxxx>
+#
+# The last version in each region is repeated, once under the actual version
+# number, once as "latest".
+
+for region in $(./all-our-regions)
+do
+	aws ec2 describe-images \
+		--region ${region:?} \
+		--owners ${ami_owner:?} \
+		--filters Name=state,Values=available \
+		--query 'Images[*].[Name ImageId]' \
+		--output text |
+	sed -ne "/^${ami_prefix:?}-/{ s/^${ami_prefix:?}-//; s/\\t/ /g; s/^/${region:?} /; p; };"
+done |
+	LANG=C sort |
+	awk -v ami_prefix=${ami_prefix:?} '
+		function new_region(region) {
+			if (prev_region != "") { printf("%s latest %s\n", prev_region, prev_ami) }
+			prev_region = region
+		}
+		{
+			if ($1 != prev_region) { new_region($1) }
+			print
+			prev_region = $1
+			prev_ami = $3
+		}
+		END { new_region("") }
+	'

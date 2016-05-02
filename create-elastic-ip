@@ -1,0 +1,54 @@
+#!/bin/bash
+
+# Create or update an elastic IP in a defined region and VPC.
+#
+# The calling environment must contain the required credentials for the target
+# account.
+#
+# Parameters are:
+#   Region.
+#   Suffix for this stack name.
+#   Text to append to description (may be empty).
+
+set -e
+set -o pipefail
+
+region=${1:?"Missing region name"}
+stack_suffix=${2:?"Missing stack suffix"}
+description_text="${3?"Missing description text"}"
+shift 3
+
+source ./functions
+stack_name="${stack_name}-${stack_suffix}"
+
+json_fragment << EODATA
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "Create an elastic IP${description_text?}",
+
+  "Resources" : {
+
+    "ElasticIP" : {
+      "Type" : "AWS::EC2::EIP",
+      "Properties" : {
+	"Domain" : "VPC"
+      }
+    }
+  },
+
+  "Outputs" : {
+    "EIP${stack_suffix}PublicIP" : {
+      "Description" : "Public IP",
+      "Value" : { "Ref" : "ElasticIP" }
+    },
+    "EIP${stack_suffix}AllocationId" : {
+      "Description" : "Allocation Id",
+      "Value" : { "Fn::GetAtt" : [ "ElasticIP", "AllocationId" ] }
+    }
+  }
+
+}
+EODATA
+
+build_stack

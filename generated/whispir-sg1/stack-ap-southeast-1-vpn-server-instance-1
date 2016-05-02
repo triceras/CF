@@ -1,0 +1,260 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  "Description" : "Define a VPN server instance",
+  "Parameters" : {
+    "KeyPairName" : {
+      "Description" : "Name of an existing EC2 KeyPair (find or create here: https://console.aws.amazon.com/ec2/v2/home#KeyPairs: )",
+      "Type" : "String",
+      "MinLength": "1",
+      "MaxLength": "64",
+      "Default" : "whispir_common",
+      "AllowedPattern" : "[-_ a-zA-Z0-9]*",
+      "ConstraintDescription" : "can contain only alphanumeric characters, spaces, dashes and underscores."
+    }
+  },
+  "Mappings" : {
+    "AmiMap" : {
+      "ap-southeast-1" : { "AMI" : "ami-3f03c55c" },
+      "ap-southeast-2" : { "AMI" : "ami-e0c19f83" },
+      "us-west-1" : { "AMI" : "ami-d1315fb1" }
+    }
+  },
+  "Resources" : {
+  "eth0" : {
+    "Type" : "AWS::EC2::NetworkInterface",
+    "Properties" : {
+      "GroupSet"                       : [ "sg-4ca4fe29", "sg-8f48bdeb" ],
+      "SubnetId"                       : "subnet-752b9302",
+      "SourceDestCheck"                : "false",
+      "Tags"                           : [ { "Key" : "Name", "Value" : "vpn1_eth0" } ],
+      "SecondaryPrivateIpAddressCount" : 0
+    }
+  },
+  "eth1" : {
+    "Type" : "AWS::EC2::NetworkInterface",
+    "Properties" : {
+      "GroupSet"                       : [ "sg-34ed9051", "sg-8948bded" ],
+      "SubnetId"                       : "subnet-742b9303",
+      "SourceDestCheck"                : "true",
+      "Tags"                           : [ { "Key" : "Name", "Value" : "vpn1_eth1" } ],
+      "SecondaryPrivateIpAddressCount" : 3
+    }
+  },
+    "vpn1" : {
+      "Type" : "AWS::EC2::Instance",
+      "CreationPolicy" : {
+        "ResourceSignal" : {
+          "Timeout" : "PT10M"
+        }
+      },
+      "Metadata" : {
+        "AWS::CloudFormation::Init" : {
+          "configSets" : {
+            "default"    : [ "base", "vpnserver", "puppetrole", "puppetagent" ]
+          },
+          "base" : {
+            "files" : {
+              "/etc/cfn/cfn-hup.conf" : {
+                "content" : { "Fn::Join" : ["", [
+                  "[main]", "\n",
+                  "stack=", { "Ref" : "AWS::StackId" }, "\n",
+                  "region=", { "Ref" : "AWS::Region" }, "\n",
+                  "interval=1"
+                  ]]
+                }
+              },
+              "/etc/cfn/hooks.d/cfn-auto-reloader.conf" : {
+                "content": { "Fn::Join" : ["", [
+                  "[cfn-auto-reloader-hook]\n",
+                  "triggers=post.update\n",
+                  "path=Resources.vpn1.Metadata.AWS::CloudFormation::Init\n",
+                  "action=/opt/aws/bin/cfn-init -v -s ", { "Ref" : "AWS::StackId" },
+                                     " -r vpn1",
+                                     " --region ", { "Ref" : "AWS::Region" },
+                                     "\n"
+                  ]]
+                }
+              },
+              "/etc/sysconfig/network-scripts/VPCData" : {
+                "content" : { "Fn::Join" : ["", [
+"VPCZones=\"A B\"\nVPCRegion=ap-southeast-1\nVPCNetworkBase=33\nVPCAccountName=whispir-sg1\nVPCNameServer1=10.33.0.10\nVPCNameServer2=10.33.64.10\nVPCDomain=ap-southeast-1.sg1.internal\n"
+                  ]]
+                },
+                "mode" : "000644"
+              },
+              "/etc/sysconfig/network" : {
+                "content" : { "Fn::Join" : ["", [
+"NETWORKING=yes\nHOSTNAME=vpn1.ap-southeast-1.sg1.internal\nNOZEROCONF=yes\nNETWORKING_IPV6=no\nIPV6INIT=no\nIPV6_ROUTER=no\nIPV6_AUTOCONF=no\nIPV6FORWARDING=no\nIPV6TO4INIT=no\nIPV6_CONTROL_RADVD=no\nSEARCH=ap-southeast-1.sg1.internal\n"
+                  ]]
+                },
+                "mode" : "000644"
+              }
+            },
+            "commands" : {
+              "010" : {
+                "command" : "yum erase -y sendmail",
+                "ignoreErrors" : "true"
+              },
+              "020" : {
+                "command" : "sed -ne '/localdomain/d; s/^HOSTNAME=/hostname /p' /etc/sysconfig/network | sh"
+              },
+              "030" : {
+                "command" : "service boot_signal restart"
+              },
+              "040" : {
+                "command" : "service network restart",
+                "test" : "grep -q '^search\\s\\+\\S\\+\\s' /etc/resolv.conf"
+              },
+              "050" : {
+                "command" : "service rsyslog restart"
+              }
+            },
+            "services" : {
+              "sysvinit" : {
+                "cfn-hup" : {
+                  "enabled" : "true",
+                  "ensureRunning" : "true",
+                  "files" : [ "/etc/cfn/cfn-hup.conf", "/etc/cfn/hooks.d/cfn-auto-reloader.conf" ]
+                }
+              }
+            }
+          },
+          "puppetrole" : {
+            "files" : {
+              "/etc/facter/facts.d/puppetrole" : {
+                "content" : "#!/bin/bash\necho puppetrole=vpnserver",
+                "mode" : "0755"
+              }
+            },
+            "commands" : {
+              "000" : {
+                "command" : "rm -f /etc/facter/facts.d/*.bak"
+              }
+            }
+          },
+          "puppetagent" : {
+            "packages" : {
+              "yum" : {
+                "puppet" : []
+              }
+            },
+            "files" : {
+              "/etc/puppet/puppet.conf.CF" : {
+                "content" : { "Fn::Join" : ["", [
+"# WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING\n# WARNING                                                                 WARNING\n# WARNING                                                                 WARNING\n# WARNING   This file is duplicated in puppet/aws and in AWS-devops/CF.   WARNING\n# WARNING   Make sure that both sources generate identical contents.      WARNING\n# WARNING                                                                 WARNING\n# WARNING                                                                 WARNING\n# WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING\n\n[main]\n    # The Puppet log directory.\n    # The default value is '$vardir/log'.\n    logdir = /var/log/puppet\n\n    # Where Puppet PID files are kept.\n    # The default value is '$vardir/run'.\n    rundir = /var/run/puppet\n\n    # Where SSL certificates are kept.\n    # The default value is '$confdir/ssl'.\n    ssldir = $vardir/ssl\n\n    certname = <%= @uuid.downcase %>\n\n[agent]\n    # The file in which puppetd stores a list of the classes\n    # associated with the retrieved configuratiion.  Can be loaded in\n    # the separate ``puppet`` executable using the ``--loadclasses``\n    # option.\n    # The default value is '$confdir/classes.txt'.\n    classfile = $vardir/classes.txt\n\n    # Where puppetd caches the local configuration.  An\n    # extension indicating the cache format is added automatically.\n    # The default value is '$confdir/localconfig'.\n    localconfig = $vardir/localconfig\n\n    # The default environment is production.  Note that this indicates the\n    # production version of the Puppet manifests, do not confuse it with the\n    # application status in the current account.  In an application development\n    # account, you would normally run the production version of the puppet\n    # manifests.  The server role tells the puppet master the state of the\n    # applications on that server.\n\n    environment = production\n"
+                  ]]
+                },
+                "mode" : "000644"
+              }
+            },
+            "commands" : {
+              "500" : {
+                "command" : "cp -a /etc/puppet/puppet.conf.CF /etc/puppet/puppet.conf; uuid=$(facter uuid); sed -i -e s'/<%= @uuid[^>]*>/'${uuid,,}'/' /etc/puppet/puppet.conf",
+                "test" : "! grep -q '^\\s*server\\>' /etc/puppet/puppet.conf"
+              }
+            },
+            "services" : {
+              "sysvinit" : {
+                "puppet" : {
+                  "enabled" : "true",
+                  "ensureRunning" : "true"
+                }
+              }
+            }
+          },
+          "vpnserver" : {
+            "files" : {
+              "/etc/sysconfig/network-scripts/ETHData" : {
+                "content" : { "Fn::Join" : ["", [
+                  "eth_interfaces=(",
+                    "eth0 eth1",
+                    ")\n",
+                  "eth0_ips=(",
+                    { "Fn::GetAtt": [ "eth0", "PrimaryPrivateIpAddress" ] },
+                    " ",
+                    { "Fn::Join" : [" ", { "Fn::GetAtt": [ "eth0", "SecondaryPrivateIpAddresses" ] } ] },
+                    ")\n",
+                  "eth0_network=$(ipcalc -n ",
+                    { "Fn::GetAtt": [ "eth0", "PrimaryPrivateIpAddress" ] },
+                    "/19 | sed -e 's/.*=//')",
+                    "\n",
+                  "eth0_prefix=${eth0_network:?}/19",
+                    "\n",
+                  "eth0_gw=$(echo ${eth0_network:?} | awk -F. '{printf(\"%s.%s.%s.%s\", $1, $2, $3, $4 + 1);}')",
+                    "\n",
+                  "eth1_ips=(",
+                    { "Fn::GetAtt": [ "eth1", "PrimaryPrivateIpAddress" ] },
+                    " ",
+                    { "Fn::Join" : [" ", { "Fn::GetAtt": [ "eth1", "SecondaryPrivateIpAddresses" ] } ] },
+                    ")\n",
+                  "eth1_network=$(ipcalc -n ",
+                    { "Fn::GetAtt": [ "eth1", "PrimaryPrivateIpAddress" ] },
+                    "/19 | sed -e 's/.*=//')",
+                    "\n",
+                  "eth1_prefix=${eth1_network:?}/19",
+                    "\n",
+                  "eth1_gw=$(echo ${eth1_network:?} | awk -F. '{printf(\"%s.%s.%s.%s\", $1, $2, $3, $4 + 1);}')",
+                    "\n"
+                  ] ]
+                }
+              },
+              "/etc/sysconfig/network-scripts/RTBData" : {
+                "content" : { "Fn::Join" : ["", [
+"routing_tables_public=( rtb-fa76e19f rtb-f976e19c )\nrouting_tables_private=( rtb-f876e19d rtb-fb76e19e )\nrouting_tables=( ${routing_tables_public[*]} ${routing_tables_private[*]} )\n"
+                  ]]
+                },
+                "mode" : "0644"
+              },
+              "/usr/bin/build.vpnserver.eth" : {
+                "content" : { "Fn::Join" : ["", [
+"#!/bin/bash\n\n# Use the data in /etc/sysconfig/network-scripts/ETHData to build the\n# ifcfg-eth* files.  See CF script create-vpn-server-instance.\n\nset -e\n\nsource /etc/sysconfig/network-scripts/ETHData\n\nfor eth in ${eth_interfaces[*]}\ndo\n       # Standard boot defines ifcfg-eth0, leave it alone.\n   if [[ ${eth:?} == eth0 ]]\n     then\n          continue\n      fi\n    ifdown ${eth} > /dev/null 2>&1 || true\n\n      file=/etc/sysconfig/network-scripts/ifcfg-${eth}\n\n    cat > ${file:?} << EODATA\nDEVICE=\"${eth}\"\nBOOTPROTO=\"none\"\nONBOOT=\"yes\"\nTYPE=\"Ethernet\"\nUSERCTL=\"yes\"\nPEERDNS=\"no\"\nIPV6INIT=\"no\"\nMTU=\"1500\"\nNOZEROCONF=\"yes\"\nNM_CONTROLLED=\"no\"\n\nEODATA\n\n     eval eth_ips=(\\${${eth}_ips[*]})\n     for i in $(seq ${#eth_ips[*]})\n        do\n            ip=${eth_ips[$(($i-1))]}\n              echo -e \"IPADDR$i=\\\"${ip:?}\\\"\\nPREFIX$i=19\\nARPCHECK$i=\\\"no\\\"\\n\" >> ${file:?}\n    done\n\n        ifup ${eth}\ndone\n"
+                  ]]
+                },
+                "mode" : "000755"
+              },
+              "/etc/facter/facts.d/vpnserver.eth_ips" : {
+                "content" : { "Fn::Join" : ["", [
+"#!/bin/bash\n\n# facter up to at least 2.1.el7sat does not handle multiple IPs on the same\n# interface unless they are visible in ifconfig.  The multiple IPs assigned to\n# eth1, eth2 etc. on a VPN server show up in 'ip addr' but not in ifconfig.  So\n# install a custom fact to get data from /etc/sysconfig/network-scripts/ETHData\n# into Puppet.\n\nset -e\n\nsource /etc/sysconfig/network-scripts/ETHData\n\necho eth_interfaces=\\\"${eth_interfaces[*]}\\\"\nfor eth in ${eth_interfaces[*]}\ndo\n     eval eth_ips=(\\${${eth}_ips[*]})\n     for i in $(seq 0 $(( ${#eth_ips[*]} - 1 )) )\n  do\n            ip=${eth_ips[$(($i))]}\n                echo \"${eth}_ip${i:?}=${ip:?}\"\n      done\n\n        # Puppet defines explicit routes to each remote VPN IP via the eth\n    # gateways.  Give Puppet facts that define the eth prefix and gateway.\n\n      eval echo \"${eth}_prefix=\\${${eth}_prefix:?}\"\n      eval echo \"${eth}_gw=\\${${eth}_gw:?}\"\ndone\n"
+                  ]]
+                },
+                "mode" : "000755"
+              }
+            },
+            "commands" : {
+              "300" : {
+                "command" : "build.vpnserver.eth"
+              }
+            }
+          }
+        }
+      },
+      "Properties" : {
+        "InstanceType" : "t2.small",
+        "DisableApiTermination" : "false",
+        "KeyName"  : { "Ref" : "KeyPairName" },
+        "ImageId" : { "Fn::FindInMap" : [ "AmiMap", { "Ref" : "AWS::Region" }, "AMI" ]},
+        "IamInstanceProfile" : "ec2-vpn-server-InstanceProfile-QPKSW7QSBPW1",
+        "NetworkInterfaces" : [
+          {
+            "DeviceIndex"        : "0",
+            "NetworkInterfaceId" : { "Ref" : "eth0" }
+          },
+          {
+            "DeviceIndex"        : "1",
+            "NetworkInterfaceId" : { "Ref" : "eth1" }
+          }
+        ],
+        "Tags" : [
+          { "Key" : "Name", "Value" : "vpn1" }
+        ],
+"UserData": "Q29udGVudC1UeXBlOiBtdWx0aXBhcnQvbWl4ZWQ7IGJvdW5kYXJ5PSI9PT09PT09PT09PT09PT12cG4xPT0iCk1JTUUtVmVyc2lvbjogMS4wCgotLT09PT09PT09PT09PT09PXZwbjE9PQpDb250ZW50LVR5cGU6IHRleHQvY2xvdWQtY29uZmlnOyBjaGFyc2V0PSJ1cy1hc2NpaSIKTUlNRS1WZXJzaW9uOiAxLjAKQ29udGVudC1UcmFuc2Zlci1FbmNvZGluZzogN2JpdApDb250ZW50LURpc3Bvc2l0aW9uOiBhdHRhY2htZW50OyBmaWxlbmFtZT0iY2xvdWQtY29uZmlnIgoKI2Nsb3VkLWNvbmZpZwoKYm9vdGNtZDoKICAtIHNldGVuZm9yY2UgMAogIC0gc2VkIC1pICcvXlxzKlNFTElOVVg9L3MvLiovU0VMSU5VWD1kaXNhYmxlZC87JyAvZXRjL3N5c2NvbmZpZy9zZWxpbnV4IC9ldGMvc2VsaW51eC9jb25maWcKCmZxZG46IHZwbjEuYXAtc291dGhlYXN0LTEuc2cxLmludGVybmFsCgotLT09PT09PT09PT09PT09PXZwbjE9PQpDb250ZW50LVR5cGU6IHRleHQveC1zaGVsbHNjcmlwdDsgY2hhcnNldD0idXMtYXNjaWkiCk1JTUUtVmVyc2lvbjogMS4wCkNvbnRlbnQtVHJhbnNmZXItRW5jb2Rpbmc6IDdiaXQKQ29udGVudC1EaXNwb3NpdGlvbjogYXR0YWNobWVudDsgZmlsZW5hbWU9ImJvb3Qtc2NyaXB0IgoKIyEvYmluL2Jhc2ggLXgKeXVtIHVwZGF0ZSAteQojIyMgU3RhcnQgb2Yga2x1ZGdlIGJlY2F1c2Ugd2UgZG8gbm90IGhhdmUgYSBsb2NhbCBSSEVMNyBnb2xkZW4gaW1hZ2UgQU1JLgojIyMgU2VlIGh0dHA6Ly9pbnRyYTo4MDgwL2Rpc3BsYXkvV2hpc3Bpci9BV1MrUkhFTDcrQU1JK0dvbGRlbitJbWFnZQpjZCAvdG1wCiMgQWRkIHRoZSBlcGVsIHJlcG9zaXRvcnkKY3VybCAtcyAtbyBlcGVsLXJlbGVhc2UtbGF0ZXN0LTcubm9hcmNoLnJwbSBodHRwczovL2RsLmZlZG9yYXByb2plY3Qub3JnL3B1Yi9lcGVsL2VwZWwtcmVsZWFzZS1sYXRlc3QtNy5ub2FyY2gucnBtCnJwbSAtaSBlcGVsLXJlbGVhc2UtbGF0ZXN0LTcubm9hcmNoLnJwbQojIGF3c2NsaSBpcyBpbiBlcGVsLiAgYXdzY2xpIC0+IHB5dGhvbjItYm90b2NvcmUgLT4gcHl0aG9uLWRvY3V0aWxzLgojIHB5dGhvbi1kb2N1dGlscyBpcyBpbiByaHVpLVJFR0lPTi1yaGVsLXNlcnZlci1vcHRpb25hbCBzbyBlbmFibGUgdGhhdCByZXBvLgp5dW0tY29uZmlnLW1hbmFnZXIgLS1lbmFibGUgcmh1aS1SRUdJT04tcmhlbC1zZXJ2ZXItb3B0aW9uYWwKIyBQYWNrYWdlcyByZXF1aXJlZCBmb3IgYXdzLWNmbi1ib290c3RyYXAgYW5kIGF3cyBjbGkKeXVtIGluc3RhbGwgLXkgcHl0aG9uLXBpcCBweXRob24tZGFlbW9uIHB5c3RhY2hlIGF3c2NsaQpjdXJsIC1zIC1vIGF3cy1jZm4tYm9vdHN0cmFwLWxhdGVzdC50YXIuZ3ogaHR0cHM6Ly9zMy5hbWF6b25hd3MuY29tL2Nsb3VkZm9ybWF0aW9uLWV4YW1wbGVzL2F3cy1jZm4tYm9vdHN0cmFwLWxhdGVzdC50YXIuZ3oKbWtkaXIgYXdzLWNmbi1ib290c3RyYXAKY2QgYXdzLWNmbi1ib290c3RyYXAKdGFyIHh6ZiAuLi9hd3MtY2ZuLWJvb3RzdHJhcC1sYXRlc3QudGFyLmd6CmNkIGF3cy1jZm4tYm9vdHN0cmFwKgpweXRob24gc2V0dXAucHkgaW5zdGFsbApjcCAvdXNyL2luaXQvcmVkaGF0L2Nmbi1odXAgL2V0Yy9pbml0LmQvCmNobW9kIGEreCAvZXRjL2luaXQuZC9jZm4taHVwCiMgUHJldmVudCBleHRyYSByZXBvc2l0b3JpZXMgYmVpbmcgdXNlZCBieSBtaXN0YWtlCnl1bS1jb25maWctbWFuYWdlciAtLWRpc2FibGUgZXBlbAp5dW0tY29uZmlnLW1hbmFnZXIgLS1kaXNhYmxlIHJodWktUkVHSU9OLXJoZWwtc2VydmVyLW9wdGlvbmFsCiMgQW1hem9uIGluc3RhbGxzIGF3cy1jZm4tYm9vdHN0cmFwIGludG8gL29wdC9hd3Mgc28gYWRkIHRoYXQgcGF0aApta2RpciAtcCAvb3B0L2F3cwpsbiAtcyAvdXNyL2Jpbi8gL29wdC9hd3MvCiMjIyBFbmQgb2Yga2x1ZGdlIGJlY2F1c2Ugd2UgZG8gbm90IGhhdmUgYSBsb2NhbCBSSEVMNyBnb2xkZW4gaW1hZ2UgQU1JCiMgSW5zdGFsbCB0aGUgZmlsZXMgYW5kIHBhY2thZ2VzIGZyb20gdGhlIG1ldGFkYXRhCi9vcHQvYXdzL2Jpbi9jZm4taW5pdCAtdiAtLXN0YWNrIGFwLXNvdXRoZWFzdC0xLXZwbi1zZXJ2ZXItaW5zdGFuY2UtMSAtLXJlc291cmNlIHZwbjEgLS1yZWdpb24gYXAtc291dGhlYXN0LTEKIyBTaWduYWwgdGhlIHN0YXR1cyBmcm9tIGNmbi1pbml0Ci9vcHQvYXdzL2Jpbi9jZm4tc2lnbmFsIC1lICQ/IC0tc3RhY2sgYXAtc291dGhlYXN0LTEtdnBuLXNlcnZlci1pbnN0YW5jZS0xIC0tcmVzb3VyY2UgdnBuMSAtLXJlZ2lvbiBhcC1zb3V0aGVhc3QtMQoKLS09PT09PT09PT09PT09PT12cG4xPT0tLQo="
+      }
+    }
+  },
+  "Outputs" : {
+    "vpn1PrivateIP" : {
+      "Description" : "Network interface for VPN traffic",
+      "Value" : { "Fn::GetAtt": [ "vpn1", "PrivateIp" ] }
+    }
+  }
+}

@@ -1,0 +1,409 @@
+#!/bin/bash
+
+# Control the building of the DNS files.
+#
+# This script is designed to be silent unless it hits any problems.  That makes
+# it easier to run automatically, you only need to look at the logs when
+# something goes wrong.
+
+set -e
+
+logger Info: Running $0
+
+source /etc/sysconfig/network-scripts/VPCData
+
+name_servers="util1 util2"
+vpcaccountsuffix=${VPCAccountName#whispir-}
+bind_zone=${VPCRegion}.${vpcaccountsuffix}.internal
+
+: ${LOCK=/var/tmp/build.named.lock}
+: ${TARGET_DIR=/var/named}
+: ${SERIAL=$(date '+%s')}
+
+# Must not execute this script in TARGET_DIR, it would overwrite the live
+# files.
+
+[[ "$(pwd -P)" != "${TARGET_DIR:?}" ]] || (echo "Must not execute $0 in ${TARGET_DIR:?}" >&2; exit 1)
+
+# We wait for up to 10 minutes to get rid of duplicate host names (SYS-2790).
+# So do not give up on the lock file until 12 minutes (30 second sleep for 24
+# retries).  Reset the lock after 13 minutes.
+
+lock_message="$(lockfile -30 -r 24 -l 780 ${LOCK} 2>&1)"
+if [[ -n "$lock_message" ]]
+then
+  echo "Error: $lock_message" >&2
+  logger "Error: $lock_message"
+  if [[ ! "$lock_message" =~ 'Forcing lock on' ]]
+  then
+    exit 1
+  fi
+fi
+
+# Do we need to reload anything?
+
+reload=0
+
+compare_and_update_file() {
+  ret=0
+  diff -I '; serial' $1 $TARGET_DIR/$1 > /dev/null 2>&1 || ret=$?
+  if [ $ret -ne 0 ]
+  then
+    sed -e "s/SERIAL/${SERIAL}/" < $1 > $TARGET_DIR/$1.new
+    chown root.named $TARGET_DIR/$1.new
+    chmod 0640 $TARGET_DIR/$1.new
+    reload=1
+  fi
+}
+
+install_file() {
+  if [[ -e $TARGET_DIR/$1.new ]]
+  then
+    /bin/mv $TARGET_DIR/$1.new $TARGET_DIR/$1
+  fi
+}
+
+header() {
+  cat > $file << EODATA
+\$TTL 60
+@ IN SOA util1.${bind_zone}. root.${bind_zone}. (
+  SERIAL  ; serial
+  1h 1h 2w 30)
+EODATA
+
+  for i in $name_servers
+  do
+    echo "@ IN NS $i.${bind_zone}." >> $file
+  done
+}
+
+declare -A aliases
+
+refresh_zones() {
+
+  # Build up the zone and reverse files from a standard header and the list of
+  # running hosts.
+  #
+  # We must have A records for the name servers, even if they are not running
+  # yet.  Without them, bind will not load the zone.  Strip out any records for
+  # the name servers and add the required entries to ensure we have the
+  # required set with no duplicates.
+
+  set -e
+
+  (
+    aws ec2 describe-instances \
+      --region=${VPCRegion} \
+      --filters Name=instance-state-name,Values=running \
+      --query 'Reservations[].Instances[].[Tags[?Key==`Name`].Value | [0], PrivateIpAddress]' \
+      --output text | \
+      tr '[A-Z]' '[a-z]' | \
+   LANG=C sort |
+ (set +e; grep -v '^'util1'\>' | grep -v '^'util2'\>'; true)
+    echo -e "util1\t${VPCNameServer1}"
+    echo -e "util2\t${VPCNameServer2}"
+  ) > instances
+
+  awk -F$'\t' '$1 ~ /[^a-z0-9-]/{print "Invalid hostname " $1 " in '${VPCAccountName}', region '${VPCRegion}'" > "/dev/stderr"; next}{print $0 " A"}' < instances 2> invalid > valid
+
+  # Report any invalid hostnames but keep going with what we have.  Otherwise
+  # we could end up with no name servers.
+
+  if [ -s invalid ]
+  then
+    while read msg
+    do
+      echo $msg >&2
+      logger Error: $msg
+    done < invalid
+  fi
+
+  # Create the zone resource record set.  Start with SOA, NS records, maybe MX
+  # records then the hosts.
+  #
+  # If there are servers like 'mailX' and there is no server just called 'mail'
+  # then add a set of entries for server 'mail' pointing at the IP address of
+  # each of the 'mailX' servers.  The postfix configuration in AWS (see Puppet
+  # in AWS) assumes that we have a server called 'mail', this gives AWS Postfix
+  # the ability to send email via any working 'mailX' server.
+  #
+  # As a fallback, if there are no mail servers in a region, use 10.1.161.13
+  # and 10.1.163.112 (Office mail servers).
+
+  file=zone.${bind_zone}
+  tmp_file=.tmp_${file:?}
+  header
+
+  mail_servers_name=$(awk '/^mail/{print $1}' < valid)
+  mail_servers_ip=$(awk '/^mail/{print $2}' < valid)
+  add_mail_set=1
+  if [[ -z "$mail_servers_ip" ]]
+  then
+    mail_servers_ip="10.1.161.13 10.1.163.112"
+  fi
+  for name in $mail_servers_name
+  do
+    echo "@ IN MX 0 $name" >> $file
+    if [[ "$name" == "mail" ]]
+    then
+      add_mail_set=0
+    fi
+  done
+  if [[ $add_mail_set -eq 1 ]]
+  then
+    aliases[mail]=1
+    for ip in $mail_servers_ip
+    do
+      echo "mail IN A $ip" >> $file
+    done
+  fi
+
+  # Now add DNS entries for AWS resources that have IPs and where AWS control
+  # the resource name.  SYS-2846.
+
+  : > ${tmp_file:?}
+
+  # aws elasticache describe-replication-groups produces output like this:
+  #
+  # <ReplicationGroupId> - single field with no label
+  # NODEGROUPS <NodeGroupId> <AutomaticFailover>
+  # NODEGROUPMEMBERS <CacheClusterId> <CacheNodeId> <CurrentRole> <PreferredAvailabilityZone>
+  # READENDPOINT <Address> <Port>
+  # PRIMARYENDPOINT <Address> <Port>
+  #
+  # For each ReplicationGroupId, generate a CNAME record for the primary (no
+  # suffix) and an A record for all members in the group (suffix -all).  To
+  # disambiguate these names from other resources, they are prefixed with
+  # 'redis-'.
+
+  aws elasticache describe-replication-groups \
+    --region=${VPCRegion} \
+    --query 'ReplicationGroups[].{Id: ReplicationGroupId, NodeGroups: NodeGroups}' \
+    --output text | \
+  awk '
+
+    function dns_group() {
+      if (ReplicationGroupId != "") {
+        if (primary != "") {
+          printf("redis-%s\t%s.\tCNAME\n", ReplicationGroupId, primary)
+        }
+        for (address in all) {
+          printf("redis-%s-all\t%s\tA\n", ReplicationGroupId, all[address])
+        }
+        ReplicationGroupId = ""
+        primary = ""
+        delete all
+      }
+    }
+
+    function host_to_ip(address) {
+      command = "host " address
+      command |& getline result
+      close(command, "to")
+      ip = result
+      sub(".* ", "", ip)
+    }
+
+    /^NODEGROUPS/ { next }
+
+    /^NODEGROUPMEMBERS/ {
+      CacheClusterId = $2
+      CurrentRole = $4
+      next
+    }
+
+    /^READENDPOINT/ {
+      Address = $2
+      host_to_ip(Address)
+      if (CurrentRole == "primary") {
+        primary = tolower(Address)
+      }
+      all[Address] = ip
+      next
+    }
+
+    /^PRIMARYENDPOINT/ { next }
+
+    # Prefix not recognised, it should be the ReplicationGroupId.
+
+    {
+      if (NF == 1) {
+        # Flush the previous group, if any
+        dns_group()
+        ReplicationGroupId = tolower($1)
+        sub("^redis-", "", ReplicationGroupId)
+        next
+      }
+    }
+
+    {
+      printf("Error: line not recognised: %s\n", $0) > "/dev/stderr"
+      exit 1
+    }
+
+    END {
+      dns_group()
+    }
+  ' >> ${tmp_file:?}
+
+  # aws rds describe-db-instances produces output like this:
+  #
+  # <DBName> <Address>
+  #
+  # For each DBName, generate a CNAME record for the database.  To disambiguate
+  # these names from other resources, they are prefixed with 'rds-'.
+
+  aws rds describe-db-instances \
+    --region=${VPCRegion} \
+    --query 'DBInstances[*].[DBName, Endpoint.Address]' \
+    --output text | \
+  awk '
+
+    function dns_group() {
+      if (DBName != "") {
+        printf("rds-%s\t%s.\tCNAME\n", DBName, Address)
+        DBName = ""
+      }
+    }
+
+    {
+      if (NF == 2) {
+        # Flush the previous group, if any
+        dns_group()
+        DBName = tolower($1)
+        sub("^rds-", "", DBName)
+        Address = tolower($2)
+        next
+      }
+    }
+
+    {
+      printf("Error: line not recognised: %s\n", $0) > "/dev/stderr"
+      exit 1
+    }
+
+    END {
+      dns_group()
+    }
+  ' >> ${tmp_file:?}
+
+  # aws elb describe-load-balancers produces output like this:
+  #
+  # <LoadBalancerName> <DNSName>
+  #
+  # For each LoadBalancerName, generate a CNAME record for the DNSName.  To
+  # disambiguate these names from other resources, they are prefixed with
+  # 'elb-'.
+
+  aws elb describe-load-balancers \
+    --region=${VPCRegion} \
+    --query 'LoadBalancerDescriptions[*].[LoadBalancerName, DNSName]' \
+    --output text | \
+  awk '
+
+    function dns_group() {
+      if (LoadBalancerName != "") {
+        printf("elb-%s\t%s.\tCNAME\n", LoadBalancerName, DNSName)
+        DBName = ""
+      }
+    }
+
+    {
+      if (NF == 2) {
+        # Flush the previous group, if any
+        dns_group()
+        LoadBalancerName = tolower($1)
+        sub("^elb-", "", LoadBalancerName)
+        DNSName = tolower($2)
+        next
+      }
+    }
+
+    {
+      printf("Error: line not recognised: %s\n", $0) > "/dev/stderr"
+      exit 1
+    }
+
+    END {
+      dns_group()
+    }
+  ' >> ${tmp_file:?}
+
+  # -all suffices can have duplicates.
+
+  for i in $(awk '$1 ~ /-all$/ { print $1 }' < ${tmp_file:?} | sort -u)
+  do
+    aliases[$i]=1
+  done
+
+  cat ${tmp_file:?} >> valid
+
+  awk '{printf("%s IN %s %s\n", $1, $3, $2)}' < valid >> $file
+
+  compare_and_update_file $file
+
+  # Create the reverse resource record set.  Start with SOA, NS records then
+  # the hosts (only from A records).
+
+  file=reverse.${VPCNetworkBase}.10
+  header
+
+  awk '$3 == "A" {split($2, ip, "."); printf("%s.%s IN PTR %s.'${bind_zone}'.\n", ip[4], ip[3], $1)}' < valid | sort -t. -k2,2n -k1,1n >> $file
+
+  compare_and_update_file $file
+}
+
+# Refresh the zones then check for duplicate A records (SYS-2790).  If there
+# are duplicate A records (excluding known aliases) then sleep for 15 seconds,
+# touch the lock file and try again.  Repeat until there are no duplicates or
+# 10 minutes has passed.
+
+giveup=$(date -d 'now+10 minutes' '+%s')
+while (true)
+do
+  refresh_zones
+  dup=
+  for name in $(awk '/ IN A/{print $1}' zone.${bind_zone} | sort | uniq -c | awk '$1 > 1{print $2}')
+  do
+    if [[ ${aliases[$name]} -ne 1 ]]
+    then
+      dup=$name
+    fi
+  done
+  if [[ -z "$dup" ]]
+  then
+    break
+  fi
+  if [[ $(date '+%s') -gt $giveup ]]
+  then
+    echo $(hostname) Duplicate file $name in this VPC, refusing to update DNS
+    exit 1
+  fi
+  sleep 15
+  touch ${LOCK}
+done
+
+if [ $reload -ne 0 ]
+then
+  ret=0
+  install_file zone.${bind_zone}
+  install_file reverse.${VPCNetworkBase}.10
+  service named reload > reload 2>&1 || ret=$?
+  if [ $ret -ne 0 ]
+  then
+    ret=0
+    service named restart > reload 2>&1 || ret=$?
+  fi
+  if [ $ret -ne 0 ]
+  then
+    msg="Reload/restart of named failed: $ret"
+    echo $msg >&2
+    logger Error: $msg
+    cat reload
+    exit $ret
+  fi
+fi
+
+rm -f ${LOCK}
+
+# vim:expandtab tabstop=2 shiftwidth=2:

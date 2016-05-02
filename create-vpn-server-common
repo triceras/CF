@@ -1,0 +1,143 @@
+#!/bin/bash
+
+# Create or update common VPN server resources.
+#
+# The calling environment must contain the required credentials for the target
+# account.
+#
+# Parameters are:
+#   Region.
+#   VPC stack name.
+
+set -e
+set -o pipefail
+
+region=${1:?"Missing region name"}
+vpc_stack_name=${2:?"Missing VPC stack name"}
+shift 2
+
+source ./functions
+
+get_vpc_data ${vpc_stack_name:?}
+
+json_fragment << 'EODATA'
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "Define common VPN server resources",
+
+  "Resources" : {
+EODATA
+
+# VPN servers could be coded to only accept traffic from specific internal or
+# external IPs, but that would mean CF changes every time an internal clinet or
+# a VPN was changed.  Allow all incoming traffic on these servers and use
+# iptables inside each VPN server.
+
+# This group is used on eth0 and controls the internal VPN traffic.
+
+sg SECVPNServerInternal "VPN Server Security Group - internal traffic"
+ipingress SECVPNServerInternal 0 ${vpc_hosts:?} 65535 tcp
+ipingress SECVPNServerInternal 0 ${vpc_hosts:?} 65535 udp
+ipingress SECVPNServerInternal -1 ${vpc_hosts:?} -1 icmp
+sgingress SECVPNServerInternal '' SECVPNServerInternal '' 112	# VVRP is protocol 112
+
+# This group is used on eth1 and controls the external VPN traffic.
+
+sg SECVPNServerExternal "VPN Server Security Group - external traffic"
+ipingress SECVPNServerExternal 500 0.0.0.0/0 500 UDP		# ISAKMP is UDP port 500
+ipingress SECVPNServerExternal 4500 0.0.0.0/0 4500 UDP		# IPSEC with NAT traversal uses UDP port 4500
+ipingress SECVPNServerExternal '' 0.0.0.0/0 '' 50		# ESP is protocol 50
+ipingress SECVPNServerExternal '' 0.0.0.0/0 '' 51		# AH is protocol 51
+
+# Scripts running on a VPN need to modify existing routing tables and to
+# associate EIPs with the current server.  Plus they need to monitor itself and
+# other VPN servers, so allow ec2 describe instances.
+
+json_fragment << 'EODATA'
+
+    "policy" : {
+      "Type": "AWS::IAM::ManagedPolicy",
+      "Properties": {
+	"Description" : "VPN server policy",
+	"PolicyDocument" : {
+	  "Version": "2012-10-17",
+	  "Statement": [
+	    {
+	      "Effect": "Allow",
+	      "Action": "ec2:DescribeInstances",
+	      "Resource": "*"
+	    },
+	    {
+	      "Effect": "Allow",
+	      "Action": "ec2:DescribeAddresses",
+	      "Resource": "*"
+	    },
+	    {
+	      "Effect": "Allow",
+	      "Action": "ec2:DescribeNetworkInterfaces",
+	      "Resource": "*"
+	    },
+	    {
+	      "Effect": "Allow",
+	      "Action": "ec2:DescribeRouteTables",
+	      "Resource": "*"
+	    },
+	    {
+	      "Effect": "Allow",
+	      "Action": "ec2:CreateRoute",
+	      "Resource": "*"
+	    },
+	    {
+	      "Effect": "Allow",
+	      "Action": "ec2:DeleteRoute",
+	      "Resource": "*"
+	    },
+	    {
+	      "Effect": "Allow",
+	      "Action": "ec2:AssociateAddress",
+	      "Resource": "*"
+	    },
+	    {
+	      "Effect": "Allow",
+	      "Action": "ec2:DisassociateAddress",
+	      "Resource": "*"
+	    }
+	  ]
+	}
+      }
+    }
+
+  },
+
+  "Outputs" : {
+    "VPNServerPolicy" : {
+      "Description" : "VPN Server policy",
+      "Value" : { "Ref" : "policy" }
+    },
+EODATA
+
+sg_outputs ''
+
+json_fragment << 'EODATA'
+  }
+}
+EODATA
+
+build_stack --capabilities CAPABILITY_IAM
+
+# Get the policy arn
+eval $(stack_outputs ${stack_name:?})
+
+echo "Create VPN server EC2 role"
+./create-ec2-role $region ec2-vpn-server vpnserver "${VPNServerPolicy:?}"
+
+# Our VPNs must have fixed local VPN IPs (public).  For load balancing between
+# customers (but not within a single customer), we create a number of local VPN
+# IPs for external (customer/telco) traffic.  Which extvpn IP is assigned to
+# which customer is outside CF, see Puppet modules/vpnserver.
+
+for ip_number in $(seq ${external_vpn_ips:?})
+do
+	./create-elastic-ip $region extvpn${ip_number:?} " for customer/telco vpns - DO NOT DELETE!"
+done

@@ -1,0 +1,847 @@
+#!/bin/bash
+
+# Create or update a single util instance.
+#
+# The calling environment must contain the required credentials for the target
+# account.
+#
+# Parameters are:
+#   Region.
+#   util stack name.
+#   Zone number for this util instance.
+#   Subnet base for this instance.
+#   Puppet role.
+
+set -e
+set -o pipefail
+
+region=${1:?"Missing region name"}
+util_stack_name=${2:?"Missing util stack name"}
+zone_number=${3:?"Missing zone number"}
+base=${4:?"Missing subnet base"}
+puppetrole=${5:?"Missing puppet role"}
+shift 5
+
+export operatingsystem=RHEL
+
+STACK_NAME=${util_stack_name}-instance-${zone_number}
+source ./functions
+zone_Suffix=$(zone_number_to_Suffix ${zone_number:?})
+
+# Get outputs from the stacks we depend on.
+#
+# NOTE: This script must be called from create-util which adds lots of
+# variables to the environment.  That includes VPC and common security data,
+# that data is the same for all util instances.
+
+eval $(stack_outputs $util_stack_name)
+
+my_ip=$(cf_host $base 10)
+
+# Add a single tunnel.
+
+add_tunnel() {
+	tunnel=($1)
+	extra_routes=($2)
+	metric=$3
+	id=${tunnel[0]}
+	ipip[${#ipip[@]}]=$id
+	# The peer information can contain variables so expand them twice.
+	# Expected variables are:
+	#   id           The network base value of the other end of the tunnel.
+	#   base         The base value of the local subnet.
+	#   zone_number  Number of the availability zone, starting at 1.
+	eval peer_outer_address=${tunnel[1]}
+	eval peer_inner_address=${tunnel[2]}
+	eval peer_route=\"${tunnel[@]:3}\"
+
+	# HACK HACK HACK.  The King St Fortigate on old firmware does not
+	# support IPIP but it does support GRE.
+
+	# FIXME: Remove this hack and the __TYPE variable when the King St
+	# Fortigate is running on decent firmware.
+
+	case $id in 50) __TYPE=GRE; ;; *) __TYPE=IPIP; ;; esac
+
+	add_file /etc/sysconfig/network-scripts/ifcfg-ipip$id 000644 << EODATA
+TYPE=$__TYPE
+DEVICE=ipip$id
+MY_INNER_IPADDR=$my_inner_address
+MY_OUTER_IPADDR=$my_ip
+PEER_INNER_IPADDR=$peer_inner_address
+PEER_OUTER_IPADDR=$peer_outer_address
+EC2SYNC=no
+EODATA
+
+	(
+		for r in $peer_route
+		do
+			echo $r dev ipip$id table 200
+		done
+		for r in "${extra_routes[@]}"
+		do
+			echo $r dev ipip$id table 200 metric $metric
+		done
+	) | add_file /etc/sysconfig/network-scripts/route-ipip$id 000644
+
+}
+
+# Add variable lines to iptables.  $1 is the address/mask, $2 is the variable
+# part of the comment, $3 is the flag value.
+
+iptables_flags() {
+	cat << EODATA
+-A PREROUTING -s $1 -m mark --mark 0x0/0xf0 -m comment --comment "src is $2" -j MARK --set-xmark 0x${3}0/0xf0
+-A PREROUTING -d $1 -m mark --mark 0x0/0x0f -m comment --comment "dst is $2" -j MARK --set-xmark 0x0${3}/0x0f
+-A OUTPUT     -s $1 -m mark --mark 0x0/0xf0 -m comment --comment "src is $2" -j MARK --set-xmark 0x${3}0/0xf0
+-A OUTPUT     -d $1 -m mark --mark 0x0/0x0f -m comment --comment "dst is $2" -j MARK --set-xmark 0x0${3}/0x0f
+EODATA
+}
+
+resource=util${zone_number:?}
+zone_Suffix=$(zone_number_to_Suffix ${zone_number:?})
+image_id=$(./choose-ami ${resource:?} generated/${account:?}/stack-${stack_name:?} ${region:?} generated/rhel7-golden-list)
+
+json_fragment << 'EODATA'
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "Define a util instance in a VPC",
+
+  "Parameters" : {
+EODATA
+
+json_fragment < keypairname
+
+json_fragment << 'EODATA'
+  },
+
+  "Resources" : {
+EODATA
+
+json_fragment << EODATA
+    "$resource" : {
+      "Type" : "AWS::EC2::Instance",
+      "CreationPolicy" : {
+	"ResourceSignal" : {
+	  "Timeout" : "PT20M"
+	}
+      },
+
+      "Metadata" : {
+	"AWS::CloudFormation::Init" : {
+
+	  "configSets" : {
+	    "default"    : [ "base", "util", "puppetrole", "puppetagent" ]
+	  },
+EODATA
+
+EXISTING_JSON_FILE=${JSON_FILE} ./configset-base $resource
+puppetrole $puppetrole
+puppetagent
+
+# tcpdump, mtr, nmap are included for network debugging of util instances and
+# their routing.
+#
+# iproute is required for the IPIP routing.
+#
+# bind is required for DNS serving.
+#
+# The scripts that build the DNS data use the lockfile command; install
+# procmail to get the lockfile command.
+
+json_fragment << 'EODATA'
+	  "util" : {
+	    "packages" : {
+	      "yum" : {
+		"tcpdump" : [],
+		"mtr" : [],
+		"nmap" : [],
+		"iproute" : [],
+		"bind" : [],
+		"procmail" : [],
+		"cronie" : [],
+EODATA
+
+json_fragment << 'EODATA'
+	      }
+	    },
+	    "files" : {
+EODATA
+
+fixed_file /usr/bin/build.named 000755
+
+fixed_file /etc/sysconfig/named 000644
+
+fixed_file /etc/cron.d/boot_signal_schedule 000644
+
+fixed_file /etc/init.d/boot_signal_listen 000755
+
+# /etc/named.conf.  Built inline because it has a variable number of entries.
+
+vpcaccountsuffix=$(account_suffix)
+forward=${VPCRegion}.${vpcaccountsuffix}.internal
+reverse=${VPCNetworkBase}.10
+
+(
+	if [[ $account == $CENTRAL_ACCOUNT ]]
+	then
+		# The central account gets queries from itself, from other VPCs
+		# and from RFC1918 addresses in the Whispir data centres.
+		recursion="127.0.0.1; $(echo "$rfc1918 " | sed -e 's/ /;/g')"
+	elif [[ $account == "whispir-au1" ]]
+	then
+
+		# Allow Nepean DR to do recursive DNS queries via whispir-au1 SYS-2933
+		#
+		# The broken Juniper firewall in Nepean DR means that we cannot
+		# do DNS queries from Nepean to whispir-users (SYS-2933).  As a
+		# temporary fix, allow Nepean DR to do recursive queries using
+		# the name servers in whispir-au1 which will then forward them
+		# as required.
+		#
+		# FIXME: Remove this section when we get rid of the Juniper, or
+		# it is upgraded to something that can do IPIP or GRE.
+
+		recursion="127.0.0.1; 10.${VPCNetworkBase}.0.0/16; 10.60.0.0/16;"
+	else
+		recursion="127.0.0.1; 10.${VPCNetworkBase}.0.0/16;"
+	fi
+	cat << EODATA
+options {
+  listen-on { $my_ip; };
+  listen-on-v6 { none; };
+  directory "/var/named";
+  dump-file "/var/named/data/cache_dump.db";
+  statistics-file "/var/named/data/named_stats.txt";
+  memstatistics-file "/var/named/data/named_mem_stats.txt";
+  recursion yes;
+  allow-recursion { $recursion };
+  empty-zones-enable yes;
+  notify no;
+};
+
+logging {
+  channel default_debug {
+    file "data/named.run";
+    severity dynamic;
+  };
+};
+
+zone "." IN {
+  type hint;
+  file "named.ca";
+};
+
+zone "${forward}" IN {
+  type master;
+  file "zone.${forward}";
+};
+
+zone "${reverse}.in-addr.arpa" IN {
+  type master;
+  file "reverse.${reverse}";
+};
+
+# whispir.net is an internal zone, forward to the Whispir office name servers.
+
+zone "whispir.net" {
+  type forward;
+  forwarders { 10.1.161.11; 10.1.163.112; };
+  forward only;
+};
+
+# Office addresses.
+
+zone "1.10.in-addr.arpa" {
+  type forward;
+  forwarders { 10.1.161.11; 10.1.163.112; };
+  forward only;
+};
+
+# King St addresses.
+
+zone "50.10.in-addr.arpa" {
+  type forward;
+  forwarders { 10.50.50.253; 10.50.50.254; };
+  forward only;
+};
+
+include "/etc/named.rfc1912.zones";
+
+# AWS uses domains "compute.internal", "google.internal" so forward those
+# requests to the local AWS name server (address 2 in the VPC).  SYS-2938
+
+zone "compute.internal" IN {
+  type forward;
+  forwarders { $(cf_host $base 2); };
+  forward only;
+};
+
+zone "google.internal" IN {
+  type forward;
+  forwarders { $(cf_host $base 2); };
+  forward only;
+};
+EODATA
+
+nexthop() {
+	text="${1:?}"
+	cat << EODATA
+
+# All unknown RFC1918 addresses are forwarded to the $text name servers.
+
+zone "10.in-addr.arpa" {
+  type forward;
+  forwarders { ${nexthop1}; ${nexthop2}; };
+  forward only;
+};
+
+zone "16.172.in-addr.arpa" {
+  type forward;
+  forwarders { ${nexthop1}; ${nexthop2}; };
+  forward only;
+};
+
+zone "17.172.in-addr.arpa" {
+  type forward;
+  forwarders { ${nexthop1}; ${nexthop2}; };
+  forward only;
+};
+
+zone "18.172.in-addr.arpa" {
+  type forward;
+  forwarders { ${nexthop1}; ${nexthop2}; };
+  forward only;
+};
+
+zone "19.172.in-addr.arpa" {
+  type forward;
+  forwarders { ${nexthop1}; ${nexthop2}; };
+  forward only;
+};
+
+zone "20.172.in-addr.arpa" {
+  type forward;
+  forwarders { ${nexthop1}; ${nexthop2}; };
+  forward only;
+};
+
+zone "21.172.in-addr.arpa" {
+  type forward;
+  forwarders { ${nexthop1}; ${nexthop2}; };
+  forward only;
+};
+
+zone "22.172.in-addr.arpa" {
+  type forward;
+  forwarders { ${nexthop1}; ${nexthop2}; };
+  forward only;
+};
+
+zone "23.172.in-addr.arpa" {
+  type forward;
+  forwarders { ${nexthop1}; ${nexthop2}; };
+  forward only;
+};
+
+zone "24.172.in-addr.arpa" {
+  type forward;
+  forwarders { ${nexthop1}; ${nexthop2}; };
+  forward only;
+};
+
+zone "25.172.in-addr.arpa" {
+  type forward;
+  forwarders { ${nexthop1}; ${nexthop2}; };
+  forward only;
+};
+
+zone "26.172.in-addr.arpa" {
+  type forward;
+  forwarders { ${nexthop1}; ${nexthop2}; };
+  forward only;
+};
+
+zone "27.172.in-addr.arpa" {
+  type forward;
+  forwarders { ${nexthop1}; ${nexthop2}; };
+  forward only;
+};
+
+zone "28.172.in-addr.arpa" {
+  type forward;
+  forwarders { ${nexthop1}; ${nexthop2}; };
+  forward only;
+};
+
+zone "29.172.in-addr.arpa" {
+  type forward;
+  forwarders { ${nexthop1}; ${nexthop2}; };
+  forward only;
+};
+
+zone "30.172.in-addr.arpa" {
+  type forward;
+  forwarders { ${nexthop1}; ${nexthop2}; };
+  forward only;
+};
+
+zone "31.172.in-addr.arpa" {
+  type forward;
+  forwarders { ${nexthop1}; ${nexthop2}; };
+  forward only;
+};
+
+zone "168.192.in-addr.arpa" {
+  type forward;
+  forwarders { ${nexthop1}; ${nexthop2}; };
+  forward only;
+};
+
+EODATA
+}
+
+if [[ $account == $CENTRAL_ACCOUNT ]]
+then
+	# The central name servers handle forwarding for all VPCs.
+
+	# Extract account name, network base and region for all accounts where
+	# all three fields are set and it is not the central account.  Add
+	# forward and reverse zones for all these VPCs to the central account
+	# name servers.
+	#
+	# Piping into 'while read' makes the while loop run in a sub shell so
+	# the changes to account_name, network_base and region do not affect
+	# the mainline code.
+
+	cat << EODATA
+
+# The central name servers handle forwarding for all application VPCs.
+
+# I want to catch queries against unknown domains ending in 'internal' and
+# return NXDOMAIN for these broken queries.  That requires a catch all master
+# zone on the central name servers for zone "internal" with an empty table.
+
+# FIXME: There is a bug in bind9 9.8.2.  If you have zone "X.internal" as type
+# forward and zone "internal" as a master then the master zone is used ahead of
+# the forward zone, even for queries against "X.internal".  Change the
+# "internal" zone from type master to type forward and bind9 follows the
+# standard rules of longest match first.  So we cannot use an empty zone,
+# instead we forward zone "internal" to 127.0.0.2 where nothing is listening.
+# That gets connection refused which propagates back to the client as SERVFAIL
+# instead of NXDOMAIN.  Not nice, but at least it returns quickly.
+#
+# This next stanza should really be:
+#
+# zone "internal" IN {
+#   type master;
+#   file "named.empty";
+# };
+
+zone "internal" IN {
+  type forward;
+  forwarders { 127.0.0.2; };
+  forward only;
+};
+EODATA
+
+	awk -F'|' '$9 != 1 {next} {print $3 " " $5 " " $7} ' < ./accounts |
+		while read account_name network_base region
+		do
+			vpcaccountsuffix=$(account_suffix)
+			cat << EODATA
+
+# Account $account_name
+
+zone "${region}.${vpcaccountsuffix}.internal" IN {
+  type forward;
+  forwarders { $(util1); $(util2); };
+  forward only;
+};
+
+zone "$network_base.10.in-addr.arpa" {
+  type forward;
+  forwarders { $(util1); $(util2); };
+  forward only;
+};
+EODATA
+		done
+
+	# All unknown 10.x.x.x zones are forwarded to the Whispir office name
+	# servers.
+
+	nexthop1=10.1.161.11
+	nexthop2=10.1.163.112
+	nexthop 'Whispir office'
+else
+	# All unknown RFC1918 and internal zones are forwarded to the central
+	# name servers.
+
+	central_network=$(awk -F'|' -v CENTRAL_ACCOUNT=$CENTRAL_ACCOUNT '$3 == CENTRAL_ACCOUNT{print $5}' < ./accounts)
+	if [[ -z "$central_network" || ! "$central_network" =~ ^[0-9]+$ ]]
+	then
+		echo Error: Cannot get central network base >&2
+		exit 1
+	fi
+	(
+		# Temporary override in a sub shell to get util1/2 in the
+		# central network.
+		network_base=$central_network
+		nexthop1=$(util1)
+		nexthop2=$(util2)
+		nexthop central
+		cat << EODATA
+
+zone "internal" {
+  type forward;
+  forwarders { ${nexthop1}; ${nexthop2}; };
+  forward only;
+};
+EODATA
+
+	)
+fi
+
+) | add_file /etc/named.conf 000640 named
+
+# Define the ipip tunnels for our direct connects.  The code below adds
+# multiple files to the init metadata.
+
+# Inward and outward routing.  These are arrays of strings, each string
+# consists of at least four fields:
+#
+#   1) The IPIP tunnel number.
+#   2) The remote outside end of the IPIP tunnel.
+#   3) The remote inside end of the IPIP tunnel (may be blank).
+#   4) The networks to route down this IPIP tunnel.
+
+source generated/${account:?}/routing-$region
+
+# A list of known ipip tunnels.  Used to remove tunnels that were defined but
+# no longer exist.
+
+ipip=()
+
+# All direct inward tunnels get the specified routes for that tunnel plus any
+# remote_inward routes.  Since the remote inward routes can appear more than
+# once, they are given a metric which starts at 10 and goes up by 10 for each
+# inward tunnel.  IOW, the first inward tunnel has precedence for remote inward
+# routes.
+
+my_inner_address=10.8.$network_base.$zone_number
+
+metric=0
+for d in "${direct_inward[@]}"
+do
+	metric=$(($metric + 10))
+	add_tunnel "$d" "${remote_inward[*]}" $metric
+done
+for d in "${direct_outward[@]}"
+do
+	add_tunnel "$d" "" 0
+done
+
+# iptables are built up from lots of chunks and written to
+# /etc/sysconfig/iptables
+
+(
+	cat << EODATA
+*mangle
+:PREROUTING ACCEPT [0:0]
+:INPUT ACCEPT [0:0]
+:FORWARD ACCEPT [0:0]
+:OUTPUT ACCEPT [0:0]
+:POSTROUTING ACCEPT [0:0]
+-A PREROUTING                               -m comment --comment "Start with no mark" -j MARK --set-mark 0
+EODATA
+
+	iptables_flags $my_ip/32 host 2
+	iptables_flags $vpc_hosts VPC 3
+
+	for d in "${direct_outward[@]}"
+	do
+		tunnel=($d)
+		id=${tunnel[0]}
+		eval peer_route=\"${tunnel[@]:3}\"
+		for r in $peer_route
+		do
+			iptables_flags $r "direct outward" 4
+		done
+	done
+
+	# FIXME: No support for remote outward.  Add the support if we ever
+	# need remote outward.
+
+	for d in "${direct_inward[@]}"
+	do
+		tunnel=($d)
+		id=${tunnel[0]}
+		eval peer_route=\"${tunnel[@]:3}\"
+		for r in $peer_route
+		do
+			iptables_flags $r "direct inward" 6
+		done
+	done
+
+	for r in "${remote_inward[@]}"
+	do
+		iptables_flags $r "remote inward" 7
+	done
+
+	# Fixed part of iptables.
+	#
+	# There are all sorts of problems with the IPIP tunnels where large
+	# packets with DF set are being dropped.  For some reason the 'ICMP
+	# need to fragment' is not getting back to the sender so it just keeps
+	# trying to send the same large packet over and over again.  Hack
+	# around this problem with IPIP interfaces by clamping the maximum TCP
+	# MSS to 1300; testing showed that 1380 was too large.
+	#
+	# It should only be necessary to clamp MSS on ipip interfaces but for
+	# some reason, it needs to be on eth interfaces as well.
+	#
+	# Remove the TCPMSS when we get rid of IPIP.
+
+	cat << 'EODATA'
+-A PREROUTING -m mark --mark 0x0/0xf0 -m comment --comment "src is public" -j MARK --set-xmark 0x10/0xf0
+-A PREROUTING -m mark --mark 0x0/0x0f -m comment --comment "dst is public" -j MARK --set-xmark 0x01/0x0f
+-A OUTPUT     -m mark --mark 0x0/0xf0 -m comment --comment "src is public" -j MARK --set-xmark 0x10/0xf0
+-A OUTPUT     -m mark --mark 0x0/0x0f -m comment --comment "dst is public" -j MARK --set-xmark 0x01/0x0f
+COMMIT
+*filter
+:INPUT ACCEPT [0:0]
+:FORWARD ACCEPT [0:0]
+:OUTPUT ACCEPT [0:0]
+:filter-eth - [0:0]
+:filter-ipip - [0:0]
+:log-reject - [0:0]
+-A INPUT -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1300
+-A OUTPUT -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1300
+-A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1300
+-A INPUT -i lo+ -j ACCEPT
+-A INPUT -i eth+ -j filter-eth
+-A INPUT -i ipip+ -j filter-ipip
+-A INPUT -j log-reject
+-A FORWARD -i eth+ -j filter-eth
+-A FORWARD -i ipip+ -j filter-ipip
+-A FORWARD -j log-reject
+-A OUTPUT -o lo+ -j ACCEPT
+-A OUTPUT -o eth+ -j filter-eth
+-A OUTPUT -o ipip+ -j filter-ipip
+-A OUTPUT -j log-reject
+-A filter-eth -m mark --mark 0x12/0xff -m comment --comment "public -> host is valid (bastion)" -j ACCEPT
+-A filter-eth -m mark --mark 0x10/0xf0 -m comment --comment "public -> anything else is wrong" -j log-reject
+-A filter-eth -m mark --mark 0x20/0xf0 -m comment --comment "host -> anywhere is valid" -j ACCEPT
+-A filter-eth -m mark --mark 0x32/0xff -m comment --comment "VPC -> host is valid" -j ACCEPT
+-A filter-eth -m mark --mark 0x35/0xff -m comment --comment "VPC -> remote outward is valid" -j ACCEPT
+-A filter-eth -m mark --mark 0x37/0xff -m comment --comment "VPC -> remote inward is valid" -j ACCEPT
+-A filter-eth -m mark --mark 0x30/0xf0 -m comment --comment "VPC -> anything else is wrong" -j log-reject
+-A filter-eth -m mark --mark 0x42/0xff -m comment --comment "direct outward -> host is valid" -j ACCEPT
+-A filter-eth -m mark --mark 0x44/0xff -m comment --comment "direct outward -> direct outward is valid" -j ACCEPT
+-A filter-eth -m mark --mark 0x45/0xff -m comment --comment "direct outward -> remote outward is valid" -j ACCEPT
+-A filter-eth -m mark --mark 0x46/0xff -m comment --comment "direct outward -> direct inward is valid" -j ACCEPT
+-A filter-eth -m mark --mark 0x47/0xff -m comment --comment "direct outward -> remote inward is valid" -j ACCEPT
+-A filter-eth -m mark --mark 0x40/0xf0 -m comment --comment "direct outward -> anything else is wrong" -j log-reject
+-A filter-eth -m mark --mark 0x50/0xf0 -m comment --comment "remote outward -> anything else is wrong" -j log-reject
+-A filter-eth -m mark --mark 0x62/0xff -m comment --comment "direct inward -> host is valid" -j ACCEPT
+-A filter-eth -m mark --mark 0x64/0xff -m comment --comment "direct inward -> direct outward is valid" -j ACCEPT
+-A filter-eth -m mark --mark 0x65/0xff -m comment --comment "direct inward -> remote outward is valid" -j ACCEPT
+-A filter-eth -m mark --mark 0x60/0xf0 -m comment --comment "direct inward -> anything else is wrong" -j log-reject
+-A filter-eth -m mark --mark 0x72/0xff -m comment --comment "remote inward -> host is valid" -j ACCEPT
+-A filter-eth -m mark --mark 0x73/0xff -m comment --comment "remote inward -> VPC is valid" -j ACCEPT
+-A filter-eth -m mark --mark 0x74/0xff -m comment --comment "remote inward -> direct outward is valid" -j ACCEPT
+-A filter-eth -m mark --mark 0x75/0xff -m comment --comment "remote inward -> remote outward is valid" -j ACCEPT
+-A filter-eth -m mark --mark 0x70/0xf0 -m comment --comment "remote inward -> anything else is wrong" -j log-reject
+-A filter-eth -m comment --comment "anything else is wrong" -j log-reject
+-A filter-ipip -m mark --mark 0x10/0xf0 -m comment --comment "public -> anything is wrong" -j log-reject
+-A filter-ipip -m mark --mark 0x20/0xf0 -m comment --comment "host must not be src ip on ipip" -j log-reject
+-A filter-ipip -m mark --mark 0x30/0xf0 -m comment --comment "VPC must not be src ip on ipip" -j log-reject
+-A filter-ipip -m mark --mark 0x44/0xff -m comment --comment "direct outward -> direct outward is valid" -j ACCEPT
+-A filter-ipip -m mark --mark 0x45/0xff -m comment --comment "direct outward -> remote outward is valid" -j ACCEPT
+-A filter-ipip -m mark --mark 0x46/0xff -m comment --comment "direct outward -> direct inward is valid" -j ACCEPT
+-A filter-ipip -m mark --mark 0x47/0xff -m comment --comment "direct outward -> remote inward is valid" -j ACCEPT
+-A filter-ipip -m mark --mark 0x40/0xf0 -m comment --comment "direct outward -> anything else is wrong" -j log-reject
+-A filter-ipip -m mark --mark 0x52/0xff -m comment --comment "remote outward -> host is valid" -j ACCEPT
+-A filter-ipip -m mark --mark 0x53/0xff -m comment --comment "remote outward -> VPC is valid" -j ACCEPT
+-A filter-ipip -m mark --mark 0x54/0xff -m comment --comment "remote outward -> direct outward is valid" -j ACCEPT
+-A filter-ipip -m mark --mark 0x55/0xff -m comment --comment "remote outward -> remote outward is valid" -j ACCEPT
+-A filter-ipip -m mark --mark 0x56/0xff -m comment --comment "remote outward -> direct inward is valid" -j ACCEPT
+-A filter-ipip -m mark --mark 0x57/0xff -m comment --comment "remote outward -> remote inward is valid" -j ACCEPT
+-A filter-ipip -m mark --mark 0x50/0xf0 -m comment --comment "remote outward -> anything else is wrong" -j log-reject
+-A filter-ipip -m mark --mark 0x64/0xff -m comment --comment "direct inward -> direct outward is valid" -j ACCEPT
+-A filter-ipip -m mark --mark 0x65/0xff -m comment --comment "direct inward -> remote outward is valid" -j ACCEPT
+-A filter-ipip -m mark --mark 0x60/0xf0 -m comment --comment "direct inward -> anything else is wrong" -j log-reject
+-A filter-ipip -m mark --mark 0x72/0xff -m comment --comment "remote inward -> host is valid" -j ACCEPT
+-A filter-ipip -m mark --mark 0x73/0xff -m comment --comment "remote inward -> VPC is valid" -j ACCEPT
+-A filter-ipip -m mark --mark 0x74/0xff -m comment --comment "remote inward -> direct outward is valid" -j ACCEPT
+-A filter-ipip -m mark --mark 0x75/0xff -m comment --comment "remote inward -> remote outward is valid" -j ACCEPT
+-A filter-ipip -m mark --mark 0x70/0xf0 -m comment --comment "remote inward -> anything else is wrong" -j log-reject
+-A filter-ipip -m comment --comment "anything else is wrong" -j log-reject
+-A log-reject -m limit --limit 10/min -j LOG --log-prefix "Illegal packet: "
+-A log-reject -j REJECT --reject-with icmp-port-unreachable
+COMMIT
+EODATA
+
+) | add_file /etc/sysconfig/iptables 000644
+
+export TRANSIT_ROUTES_TUNNELS="${ipip[*]}"
+variable_file /etc/sysconfig/transit_routes-config 000644
+
+fixed_file /sbin/ifup-local 000755
+fixed_file /etc/init.d/transit_routes 000755
+
+# Issuing service network restart can lose the sysctl settings.  As well as
+# issuing commands, make sure that the sysctl defaults have the required
+# values.
+
+fixed_file /etc/sysctl.d/60-util.conf 000644
+
+# Make sure the /var/named files exist before trying to start named.  Otherwise
+# named will not start which stuffs up the initial boot.
+
+json_fragment << 'EODATA'
+	    # end of files
+	    },
+	    "commands" : {
+	      "300" : {
+		"command" : "build.named",
+		"cwd" : "/tmp",
+		"ignoreErrors" : "true"
+	      },
+	      "310" : {
+		"command" : "for i in $(find /proc/sys -name rp_filter); do echo 0 > $i; done"
+	      },
+	      "320" : {
+		"command" : "for i in $(find /proc/sys -name forwarding); do echo 1 > $i; done"
+	      },
+EODATA
+
+# Restart named, boot_signal and boot_signal_listen if anything that might
+# affect those services has changed.  Worst case, we send messages to
+# ourselves, rebuild the zone files and find that nothing has changed.
+
+json_fragment << 'EODATA'
+	    # End of commands
+	    },
+	    "services" : {
+	      "sysvinit" : {
+	        "crond" : {
+		  "enabled" : "true",
+		  "ensureRunning" : "true"
+	        },
+	        "iptables" : {
+		  "enabled" : "true",
+		  "files" : [ "/etc/sysconfig/iptables" ]
+	        },
+	        "transit_routes" : {
+		  "enabled" : "true",
+		  "files" : [ "/etc/init.d/transit_routes", "/etc/sysconfig/transit_routes-config" ]
+	        },
+	        "named" : {
+		  "enabled" : "true",
+		  "files" : [ "/etc/named.conf", "/usr/bin/build.named", "/etc/sysconfig/named" ]
+	        },
+	        "boot_signal" : {
+		  "enabled" : "true",
+		  "files" : [ "/etc/named.conf", "/usr/bin/build.named", "/etc/init.d/boot_signal" ]
+	        },
+	        "boot_signal_listen" : {
+		  "enabled" : "true",
+		  "files" : [ "/usr/bin/build.named", "/etc/init.d/boot_signal_listen" ]
+	        }
+	      }
+	    }
+	  },
+EODATA
+
+json_fragment << 'EODATA'
+	# End of AWS::CloudFormation::Init
+	}
+      # End of Metadata
+      },
+EODATA
+
+json_fragment << EODATA
+
+      "Properties" : {
+        "InstanceType" : "t2.micro",
+	"DisableApiTermination" : "false",
+        "KeyName"  : { "Ref" : "KeyPairName" },
+        "SourceDestCheck" : "false",
+        "ImageId" : "${image_id:?}",
+        "IamInstanceProfile" : "${EC2ROLEutil:?}",
+        "NetworkInterfaces" : [{
+          "GroupSet"                 : [ "${SECCommonInternal:?}", "${SECICMPExternal:?}", "${UtilSecurityGroup:?}" ],
+          "AssociatePublicIpAddress" : "true",
+          "DeviceIndex"              : "0",
+          "DeleteOnTermination"      : "true",
+          "PrivateIpAddress"         : "$my_ip",
+          "SubnetId"                 : "$(eval echo \${VPCPublicSubnet$zone_Suffix:?})"
+        }],
+        "Tags" : [
+          { "Key" : "Name", "Value" : "$resource" }
+        ],
+EODATA
+
+./userdata-rhel7-golden ${resource:?} ${resource:?} ${stack_name:?} | json_fragment
+
+json_fragment << 'EODATA'
+      }
+    },
+
+EODATA
+
+# Public and private subnets require that RFC1918 addresses are pointed at the
+# util box in the same zone.  The util boxes talk to the inward networks to
+# handle unknown RFC1918 addresses.
+
+for r in $rfc1918
+do
+	r_label=$(route_label $r)
+	json_fragment << EODATA
+    "PrivateRoute$resource${r_label:?}" : {
+      "DependsOn" : ["$resource"],
+      "Type" : "AWS::EC2::Route",
+      "Properties" : {
+        "RouteTableId" : "$(eval echo \${VPCPrivateRouteTable$zone_Suffix:?})",
+        "DestinationCidrBlock" : "$r",
+        "InstanceId" : { "Ref" : "$resource" }
+      }
+    },
+    "PublicRoute$resource${r_label:?}" : {
+      "DependsOn" : ["$resource"],
+      "Type" : "AWS::EC2::Route",
+      "Properties" : {
+        "RouteTableId" : "$(eval echo \${VPCPublicRouteTable$zone_Suffix:?})",
+        "DestinationCidrBlock" : "$r",
+        "InstanceId" : { "Ref" : "$resource" }
+      }
+    },
+
+EODATA
+done
+
+json_fragment << 'EODATA'
+  },
+
+  "Outputs" : {
+EODATA
+
+json_fragment << EODATA
+    "UtilInstanceId$zone_number" : {
+      "Description" : "Util instance id",
+      "Value" : { "Ref" : "$resource" }
+    },
+    "UtilIPPublic$zone_number" : {
+      "Description" : "Util IP address",
+      "Value" : { "Fn::GetAtt" : [ "$resource", "PublicIp" ] }
+    },
+EODATA
+
+json_fragment << 'EODATA'
+  }
+}
+EODATA
+
+build_stack

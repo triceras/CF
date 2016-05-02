@@ -1,0 +1,86 @@
+#!/bin/bash
+
+# Generate userdata for RHEL7 as MIME multipart and base64 encoded.
+#
+# The cloud-config section lets us use the early boot code that cloud-init
+# runs.  The x-shellscript section runs our late boot script.  Using two
+# sections means we have to supply data in MIME multipart format.
+#
+# Cloud Formation wants UserData as a base64 encoded string.  The actual
+# representation of the string has no embedded newlines and is quoted.
+# Building multipart inside CF is messy so this code generates the raw base64
+# string itself.  All CF sees is
+#
+#   "UserData" : "very_long_base64_string",
+#
+# Early in boot (bootcmd), turn off selinux enforcement (turns enforcing into
+# permissive) and update /etc/sysconfig/selinux and /etc/selinux/config to
+# permanently disable selinux.  Changes to /etc/sysconfig/selinux and
+# /etc/selinux/config will only take effect on the next boot.
+
+set -e
+set -o pipefail
+
+resource="${1:?"Missing resource name"}"
+hostname="${2:?"Missing hostname"}"
+stack_name="${3:?"Missing stack name"}"
+
+base64 << EODATA | tr -d '\n' | sed -e 's/^/"UserData": "/; s/$/",/'
+Content-Type: multipart/mixed; boundary="===============${resource}=="
+MIME-Version: 1.0
+
+--===============${resource}==
+Content-Type: text/cloud-config; charset="us-ascii"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+Content-Disposition: attachment; filename="cloud-config"
+
+#cloud-config
+
+bootcmd:
+  - setenforce 0
+  - sed -i '/^\s*SELINUX=/s/.*/SELINUX=disabled/;' /etc/sysconfig/selinux /etc/selinux/config
+
+fqdn: ${hostname:?}.${VPCDomain:?}
+
+--===============${resource}==
+Content-Type: text/x-shellscript; charset="us-ascii"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+Content-Disposition: attachment; filename="boot-script"
+
+#!/bin/bash -x
+yum update -y
+### Start of kludge because we do not have a local RHEL7 golden image AMI.
+### See http://intra:8080/display/Whispir/AWS+RHEL7+AMI+Golden+Image
+cd /tmp
+# Add the epel repository
+curl -s -o epel-release-latest-7.noarch.rpm https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm
+rpm -i epel-release-latest-7.noarch.rpm
+# awscli is in epel.  awscli -> python2-botocore -> python-docutils.
+# python-docutils is in rhui-REGION-rhel-server-optional so enable that repo.
+yum-config-manager --enable rhui-REGION-rhel-server-optional
+# Packages required for aws-cfn-bootstrap and aws cli
+yum install -y python-pip python-daemon pystache awscli
+curl -s -o aws-cfn-bootstrap-latest.tar.gz https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-latest.tar.gz
+mkdir aws-cfn-bootstrap
+cd aws-cfn-bootstrap
+tar xzf ../aws-cfn-bootstrap-latest.tar.gz
+cd aws-cfn-bootstrap*
+python setup.py install
+cp /usr/init/redhat/cfn-hup /etc/init.d/
+chmod a+x /etc/init.d/cfn-hup
+# Prevent extra repositories being used by mistake
+yum-config-manager --disable epel
+yum-config-manager --disable rhui-REGION-rhel-server-optional
+# Amazon installs aws-cfn-bootstrap into /opt/aws so add that path
+mkdir -p /opt/aws
+ln -s /usr/bin/ /opt/aws/
+### End of kludge because we do not have a local RHEL7 golden image AMI
+# Install the files and packages from the metadata
+/opt/aws/bin/cfn-init -v --stack ${stack_name:?} --resource ${resource:?} --region ${region:?}
+# Signal the status from cfn-init
+/opt/aws/bin/cfn-signal -e \$? --stack ${stack_name:?} --resource ${resource:?} --region ${region:?}
+
+--===============${resource}==--
+EODATA

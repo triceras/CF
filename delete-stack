@@ -1,0 +1,48 @@
+#!/bin/bash
+
+# Delete a Cloudformation stack.  Wait for the operation to complete.
+#
+# Parameters are:
+#   Region.
+#   Stack name.
+
+set -e
+set -o pipefail
+
+region=${1:?"Missing region name"}
+stack_name=${2:?"Missing stack name"}
+shift 2
+
+# Skip cloud formation if SKIP_CF is set.
+
+[[ -z "$SKIP_CF" ]] || exit 0
+
+get_status() {
+	aws cloudformation describe-stacks --region $region --query "Stacks[?StackName == '$stack_name'].StackStatus" --output text
+}
+
+status=$(get_status)
+
+if [[ -n "$status" ]]
+then
+	echo $stack_name is in "$status", deleting it
+	ret=0
+	aws cloudformation delete-stack --region $region --stack-name $stack_name || ret=$?
+	while [[ $ret -eq 0 ]]
+	do
+		status=$(get_status)
+		if [[ -z "$status" ]]
+		then
+			echo
+			break
+		fi
+		if [[ "$status" != "$prev" ]]
+		then
+			echo -ne "\nStack $stack_name $status "
+			prev="$status"
+		else
+			echo -n '.'
+		fi
+		sleep 5
+	done
+fi

@@ -1,0 +1,38 @@
+# Customer facing (external) hosts.
+#
+# The zone name will be something like ap1.whispir.com.
+#
+# A records are replaced by the external IP of the named host, if the host
+# exists.
+
+@			A	web1-1a
+*			A	web1-1a
+cdn			A	web1-1a
+discuss			A	nodejs1-1a
+mail			A	mail1-1a
+mail.service		A	mail1-1a
+smsgate			A	web1smsgate-1a
+www			A	web1-1a
+api			A	proxy_sg1_1b proxy_sg1_1a
+@			MX	"10 mail.service.$zone_name."
+api			MX	"10 mail.service.$zone_name."
+company			MX	"10 mail.service.$zone_name."
+contact			MX	"10 mail.service.$zone_name."
+eapi			MX	"10 mail.service.$zone_name."
+james			MX	"10 mail.service.$zone_name."
+project			MX	"10 mail.service.$zone_name."
+service			MX	"10 mail.service.$zone_name."
+sms			MX	"10 mail.service.$zone_name."
+user			MX	"10 mail.service.$zone_name."
+external		MX	"10 mail.service.$zone_name."
+list.company		MX	"10 mail.service.$zone_name."
+list.external		MX	"10 mail.service.$zone_name."
+list.personal		MX	"10 mail.service.$zone_name."
+list.project		MX	"10 mail.service.$zone_name."
+personal		MX	"10 mail.service.$zone_name."
+team.company		MX	"10 mail.service.$zone_name."
+team.contact		MX	"10 mail.service.$zone_name."
+team.external		MX	"10 mail.service.$zone_name."
+team.personal		MX	"10 mail.service.$zone_name."
+team.user		MX	"10 mail.service.$zone_name."
+@			TXT	"\\"v=spf1 a:mail.service.$zone_name. ~all\\""

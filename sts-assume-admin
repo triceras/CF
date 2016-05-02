@@ -1,0 +1,8 @@
+# Not a stand alone script, you must source this code fragment.  It changes the
+# environment of the caller.
+#
+# You can supply an account name or an account number, this code maps one to
+# the other.
+
+account=${1:?"Missing account name"}
+source ./sts-assume-role "$account" admin-role true

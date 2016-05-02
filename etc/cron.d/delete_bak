@@ -1,0 +1,14 @@
+MAILTO = alerts@whispir.com
+
+# cfn-hup creates .bak files when CF changes a file.  Some services (e.g. cron)
+# will execute those .bak files, causing errors.  Delete all .bak files under
+# /etc every 10 minutes.
+#
+# Do not delete .bak files under /var, some of the puppet application
+# repositories have .bak files :-(.
+
+# Some systems do not have sbin on the path :-(
+
+PATH=/sbin:/bin:/usr/sbin:/usr/bin
+
+*/10 * * * * root find /etc -xdev -name '*.bak' -type f -delete

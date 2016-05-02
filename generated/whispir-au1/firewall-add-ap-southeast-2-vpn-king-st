@@ -1,0 +1,228 @@
+# Account: whispir-au1
+# Region: ap-southeast-2
+# Firewall type: Fortigate
+# Firewall interface: wan1
+# VPC stack: ap-southeast-2-vpc
+# VPC id: vpc-72ea5917
+# VPN stack: ap-southeast-2-vpn-king-st
+# VPN Connection Id: vpn-88360595
+# Customer gateway ip: 116.240.201.165
+# Network base: 32
+
+config firewall address
+    edit "AWS_NET"
+        set comment "Addresses assigned to AWS accounts"
+        set subnet 10.32.0.0 255.240.0.0
+end
+config vpn ipsec phase1-interface
+    edit "aws-au1-1"
+        set interface "wan1"
+        set local-gw 116.240.201.165
+        set dhgrp 2
+        set proposal aes128-sha1
+        set remote-gw 54.240.204.89
+        set psksecret Hs35Dbt_FzBz0Q66vQGlD_vMhGdDSJBq
+        set dpd-retryinterval 10
+end
+config vpn ipsec phase2-interface
+    edit "aws-au1-1-p2"
+        set phase1name "aws-au1-1"
+        set proposal aes128-sha1
+        set dhgrp 2
+        set keylifeseconds 3600
+end
+config system gre-tunnel
+    edit "aws-au1-ipip-1"
+        set interface "aws-au1-1"
+        set local-gw 10.50.50.1
+        set remote-gw 10.32.0.10
+end
+config system interface
+    edit "aws-au1-ipip-1"
+        set allowaccess ping
+        set mtu 1300
+end
+config firewall policy
+    edit 3210
+        set srcintf "aws-au1-1"
+        set dstintf "any"
+        set srcaddr "AWS_NET"
+        set dstaddr "AWS_NET"
+        set action accept
+        set schedule "always"
+        set service "ANY"
+    next
+    edit 13210
+        set srcintf "aws-au1-ipip-1"
+        set dstintf "any"
+        set srcaddr "AWS_NET"
+        set dstaddr "AWS_NET"
+        set action accept
+        set schedule "always"
+        set service "ANY"
+    next
+    edit 3211
+        set srcintf "int_prod"
+        set dstintf "aws-au1-1"
+        set srcaddr "all"
+        set dstaddr "AWS_NET"
+        set action accept
+        set schedule "always"
+        set service "ANY"
+    next
+    edit 3212
+        set srcintf "aws-au1-1"
+        set dstintf "int_prod"
+        set srcaddr "AWS_NET"
+        set dstaddr "all"
+        set action accept
+        set schedule "always"
+        set service "ANY"
+    next
+    edit 13211
+        set srcintf "int_prod"
+        set dstintf "aws-au1-ipip-1"
+        set srcaddr "all"
+        set dstaddr "AWS_NET"
+        set action accept
+        set schedule "always"
+        set service "ANY"
+    next
+    edit 13212
+        set srcintf "aws-au1-ipip-1"
+        set dstintf "int_prod"
+        set srcaddr "AWS_NET"
+        set dstaddr "all"
+        set action accept
+        set schedule "always"
+        set service "ANY"
+    next
+end
+config system interface
+    edit "aws-au1-1"
+        set vdom "root"
+#       set ip 169.254.247.26 255.255.255.255
+        set allowaccess ping
+        set type tunnel
+        set tcp-mss 1387
+#       set remote-ip 169.254.247.25
+        set interface "wan1"
+end
+
+config vpn ipsec phase1-interface
+    edit "aws-au1-2"
+        set interface "wan1"
+        set local-gw 116.240.201.165
+        set dhgrp 2
+        set proposal aes128-sha1
+        set remote-gw 54.240.204.123
+        set psksecret cIzkSOtairBG_lW95qiC22Wo.keS51E4
+        set dpd-retryinterval 10
+end
+config vpn ipsec phase2-interface
+    edit "aws-au1-2-p2"
+        set phase1name "aws-au1-2"
+        set proposal aes128-sha1
+        set dhgrp 2
+        set keylifeseconds 3600
+end
+config system gre-tunnel
+    edit "aws-au1-ipip-2"
+        set interface "aws-au1-2"
+        set local-gw 10.50.50.1
+        set remote-gw 10.32.64.10
+end
+config system interface
+    edit "aws-au1-ipip-2"
+        set allowaccess ping
+        set mtu 1300
+end
+config firewall policy
+    edit 3220
+        set srcintf "aws-au1-2"
+        set dstintf "any"
+        set srcaddr "AWS_NET"
+        set dstaddr "AWS_NET"
+        set action accept
+        set schedule "always"
+        set service "ANY"
+    next
+    edit 13220
+        set srcintf "aws-au1-ipip-2"
+        set dstintf "any"
+        set srcaddr "AWS_NET"
+        set dstaddr "AWS_NET"
+        set action accept
+        set schedule "always"
+        set service "ANY"
+    next
+    edit 3221
+        set srcintf "int_prod"
+        set dstintf "aws-au1-2"
+        set srcaddr "all"
+        set dstaddr "AWS_NET"
+        set action accept
+        set schedule "always"
+        set service "ANY"
+    next
+    edit 3222
+        set srcintf "aws-au1-2"
+        set dstintf "int_prod"
+        set srcaddr "AWS_NET"
+        set dstaddr "all"
+        set action accept
+        set schedule "always"
+        set service "ANY"
+    next
+    edit 13221
+        set srcintf "int_prod"
+        set dstintf "aws-au1-ipip-2"
+        set srcaddr "all"
+        set dstaddr "AWS_NET"
+        set action accept
+        set schedule "always"
+        set service "ANY"
+    next
+    edit 13222
+        set srcintf "aws-au1-ipip-2"
+        set dstintf "int_prod"
+        set srcaddr "AWS_NET"
+        set dstaddr "all"
+        set action accept
+        set schedule "always"
+        set service "ANY"
+    next
+end
+config system interface
+    edit "aws-au1-2"
+        set vdom "root"
+#       set ip 169.254.247.30 255.255.255.255
+        set allowaccess ping
+        set type tunnel
+        set tcp-mss 1387
+#       set remote-ip 169.254.247.29
+        set interface "wan1"
+end
+
+config router static
+    edit 3200
+        set device "aws-au1-1"
+        set dst 10.32.0.0 255.255.0.0
+        set priority 0
+    next
+    edit 3201
+        set device "aws-au1-2"
+        set dst 10.32.0.0 255.255.0.0
+        set priority 0
+    next
+    edit 3202
+        set device "aws-au1-ipip-1"
+        set dst 10.32.0.0 255.255.0.0
+        set priority 1
+    next
+    edit 3203
+        set device "aws-au1-ipip-2"
+        set dst 10.32.0.0 255.255.0.0
+        set priority 1
+    next
+end

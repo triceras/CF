@@ -1,0 +1,5 @@
+#!/bin/bash
+
+# Return all the regions used by all whispir AWS accounts.
+
+echo $(awk -F'|' '/^\|\|/{next}{print $7}' < accounts | sort -u)

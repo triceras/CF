@@ -1,0 +1,48 @@
+# Code copied from http://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-create-trails-in-all-regions-by-using-the-aws-cli.html
+# and tweaked to run over multiple accounts using temporary credentials.  Also
+# tweaked to detect if the region already has a cloudtrail and to delete any
+# existing trail first.
+#
+# NOTE: This script will delete any existing cloud trails and redefine them
+# from scratch.  So every time it runs, it recreates every entry.
+#
+# At the start of this script, AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must
+# be set to your credentials from our central account.
+#
+# Parameters are the account names or numbers (names are much easier) in which
+# you need to create the cloud trail.
+
+set -e
+set -o pipefail
+
+source ./functions
+
+for account in $@
+do
+	# Run in a sub shell so the change to credentials does not affect the
+	# top level credentials.
+	(
+		# Set temporary credentials for this loop
+		source ./sts-assume-admin $account
+
+		# Create trails in all AWS standard regions with the AWS CLI and Linux.
+		CLOUDTRAIL_S3_BUCKET="${CENTRAL_ACCOUNT:?}-cloudtrail"
+		regionlist=($(region_list))
+		for region in "${regionlist[@]}"
+		do
+			trail="$(aws --region $region cloudtrail describe-trails --query 'trailList[0].TrailARN' --output text)"
+			if [ -n "$trail" ]
+			then
+				aws --region $region cloudtrail stop-logging --name $trail --output table || true
+				aws --region $region cloudtrail delete-trail --name $trail --output table
+			fi
+			if [ $region = ${GLOBAL_REGION:?} ]
+			then
+				aws --region $region cloudtrail create-trail --name $region --s3-bucket-name $CLOUDTRAIL_S3_BUCKET --include-global-service-events --output table
+			else
+				aws --region $region cloudtrail create-trail --name $region --s3-bucket-name $CLOUDTRAIL_S3_BUCKET --no-include-global-service-events --output table
+			fi
+			aws --region $region cloudtrail start-logging --name $region --output table
+		done
+	)
+done

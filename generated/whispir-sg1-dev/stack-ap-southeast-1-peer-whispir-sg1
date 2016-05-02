@@ -1,0 +1,38 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  "Description" : "Define the peer routes from whispir-sg1-dev to whispir-sg1",
+  "Resources" : {
+    "PeerRoutertb33155d56" : {
+      "Type" : "AWS::EC2::Route",
+      "Properties" : {
+        "RouteTableId" : "rtb-33155d56",
+        "DestinationCidrBlock" : "10.33.0.0/16",
+        "VpcPeeringConnectionId" : "pcx-ce0588a7"
+      }
+    },
+    "PeerRoutertb32155d57" : {
+      "Type" : "AWS::EC2::Route",
+      "Properties" : {
+        "RouteTableId" : "rtb-32155d57",
+        "DestinationCidrBlock" : "10.33.0.0/16",
+        "VpcPeeringConnectionId" : "pcx-ce0588a7"
+      }
+    },
+    "PeerRoutertb3d155d58" : {
+      "Type" : "AWS::EC2::Route",
+      "Properties" : {
+        "RouteTableId" : "rtb-3d155d58",
+        "DestinationCidrBlock" : "10.33.0.0/16",
+        "VpcPeeringConnectionId" : "pcx-ce0588a7"
+      }
+    },
+    "PeerRoutertb3c155d59" : {
+      "Type" : "AWS::EC2::Route",
+      "Properties" : {
+        "RouteTableId" : "rtb-3c155d59",
+        "DestinationCidrBlock" : "10.33.0.0/16",
+        "VpcPeeringConnectionId" : "pcx-ce0588a7"
+      }
+    }
+  }
+}

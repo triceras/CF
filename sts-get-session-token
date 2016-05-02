@@ -1,0 +1,37 @@
+# Not a stand alone script, you must source this code fragment.  It changes the
+# environment of the caller.
+#
+# The first parameter is the MFA value or the empty string ('').  If it is the
+# empty string then this script assumes that the user does not have an MFA.
+
+(
+	set -e
+	set -o pipefail
+	source ./functions
+
+	: ${ARN_BASE='arn:aws:iam::283928602837:mfa'}
+
+	token="${1?"Missing MFA token"}"
+
+	: ${STS_USER="$(whoami)"}
+
+	if [ -z "$token" ]
+	then
+		mfa=
+	else
+		mfa="--serial-number $ARN_BASE/$STS_USER --token-code $token"
+	fi
+
+	# Unset any existing session variables first.
+
+	eval $(env | sed -ne '/^AWS/{s/=.*//; s/^/unset /; p;}')
+
+	echo "User $STS_USER"
+	aws sts get-session-token \
+		$mfa \
+		--output text | \
+	export_credentials > /tmp/credentials-$$
+)
+
+[ ! -s /tmp/credentials-$$ ] || source /tmp/credentials-$$
+rm -f /tmp/credentials-$$

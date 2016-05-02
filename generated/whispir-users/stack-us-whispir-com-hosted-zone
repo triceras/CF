@@ -1,0 +1,12 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  "Description" : "Define a hosted zone",
+  "Resources" : {
+    "ZoneName" : {
+      "Type" : "AWS::Route53::HostedZone",
+      "Properties" : {
+        "Name" : "us.whispir.com"
+      }
+    }
+  }
+}

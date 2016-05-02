@@ -1,0 +1,108 @@
+#!/bin/bash
+
+# Create a VPC peering connection between two VPC in the same region.  The
+# first account the hub account for the region, it is the one that owns the
+# VPNS.  The other account is a spoke account.
+#
+# Parameters:
+#   Region
+#   Hub account name
+#   Hub stack name
+#   Spoke account name
+#   Spoke stack name
+
+set -e
+
+region=${1:?"Missing region name"}
+hub_account_name=${2:?"Missing hub account name"}
+hub_vpc_stack_name=${3:?"Missing hub stack name"}
+spoke_account_name=${4:?"Missing spoke account name"}
+spoke_vpc_stack_name=${5:?"Missing spoke stack name"}
+
+: ${PEERING_FILE=/tmp/create-vpc-peer-$$}
+
+: > "$PEERING_FILE"
+
+# First get some data from both accounts.
+
+# Spoke
+(
+	source sts-assume-admin $hub_account_name > /dev/null
+	eval $(aws cloudformation describe-stacks --region $region --stack-name $hub_vpc_stack_name --output text | awk -F'\t' '/OUTPUTS/{printf("export %s=\"%s\"\n", $3, $4)}')
+	echo export hub_vpc_id=$VPCID >> "$PEERING_FILE"
+	echo export hub_account_number=$(./map-account-number $hub_account_name) >> "$PEERING_FILE"
+)
+
+# Hub
+(
+	source sts-assume-admin $spoke_account_name > /dev/null
+	eval $(aws cloudformation describe-stacks --region $region --stack-name $spoke_vpc_stack_name --output text | awk -F'\t' '/OUTPUTS/{printf("export %s=\"%s\"\n", $3, $4)}')
+	echo export spoke_vpc_id=$VPCID >> "$PEERING_FILE"
+	echo export spoke_account_number=$(./map-account-number $spoke_account_name) >> "$PEERING_FILE"
+)
+
+# Now do the work.
+
+# Piping a command into 'while read' runs the while loop in a sub shell so
+# setting a variable inside the loop and testing the variable outside the loop
+# does not work.  Use PEERING_FILE as a flag to say that we found a match.
+# Delete PEERING_FILE if there is nothing to do.
+#
+# Also it can take some time for the peering request to get from one account to
+# another.  The spoke leaves PEERING_FILE alone as a flag to tell the hub that
+# the spoke generated a request.  The hub loops until the request arrives then
+# removes the flag file.
+
+source "$PEERING_FILE"
+
+# Spoke
+(
+	source sts-assume-admin $spoke_account_name > /dev/null
+
+	aws ec2 describe-vpc-peering-connections --region=$region --output text --query="VpcPeeringConnections[*].[VpcPeeringConnectionId Status.Code AccepterVpcInfo.OwnerId AccepterVpcInfo.VpcId]" |
+	while read request code r_hub_account_number r_hub_vpc_id
+	do
+		#DEBUG: echo Spoke VPC peers $spoke_account_name $request $code $r_hub_account_number $r_hub_vpc_id
+		if [[ $code == 'active' && $r_hub_account_number == $hub_account_number && $r_hub_vpc_id == $hub_vpc_id ]]
+		then
+			echo Already have a peer from $spoke_account_name $spoke_vpc_id to $hub_account_name $hub_vpc_id
+			rm "$PEERING_FILE"
+			break
+		fi
+	done
+	if [[ -e "$PEERING_FILE" ]]
+	then
+		echo Creating request from $spoke_account_name $spoke_vpc_id to $hub_account_name $hub_vpc_id
+		aws ec2 create-vpc-peering-connection --region=$region --vpc-id $spoke_vpc_id --peer-owner-id $hub_account_number --peer-vpc-id $hub_vpc_id
+	fi
+)
+
+# Hub
+(
+	if [[ -e "$PEERING_FILE" ]]
+	then
+		echo Looking for peer requests from $spoke_account_name to $hub_account_name
+		source sts-assume-admin $hub_account_name > /dev/null
+		while [[ -e "$PEERING_FILE" ]]
+		do
+			aws ec2 describe-vpc-peering-connections --region=$region --output text --query="VpcPeeringConnections[*].[VpcPeeringConnectionId Status.Code RequesterVpcInfo.OwnerId RequesterVpcInfo.VpcId]" |
+			while read request code r_spoke_account_number r_spoke_vpc_id
+			do
+				#DEBUG: echo Hub VPC peers $request $code $r_spoke_account_number $r_spoke_vpc_id
+				if [[ $code != 'deleted' && $r_spoke_account_number == $spoke_account_number && $r_spoke_vpc_id == $spoke_vpc_id ]]
+				then
+					echo Accepting peer request $request from $r_spoke_account_number $r_spoke_vpc_id
+					aws ec2 accept-vpc-peering-connection --region=$region --vpc-peering-connection-id $request
+					rm "$PEERING_FILE"
+				fi
+			done
+			if [[ -e "$PEERING_FILE" ]]
+			then
+				echo Hub is waiting for peer request to arrive
+				sleep 10
+			fi
+		done
+	fi
+)
+
+rm -f "$PEERING_FILE"

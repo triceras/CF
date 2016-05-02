@@ -1,0 +1,78 @@
+#!/bin/bash
+
+# Convert an instance to an AMI and return the image name and the AMI id.
+#
+# The calling environment must contain the required credentials for the target
+# account.
+#
+# Parameters are:
+#   Region.
+#   AMI prefix.
+#   Instance id.
+#   Message prefix.
+
+set -e
+set -o pipefail
+
+region=${1:?"Missing region name"}
+ami_prefix=${2:?"Missing AMI prefix"}
+instance_id=${3:?"Missing instance id"}
+message_prefix=${4:?"Missing message prefix"}
+shift 4
+
+# Calculate the new image name.  It is <ami_prefix>-<CCYY-MM-DD-HH-MM>.
+
+image_name=${ami_prefix:?}-$(date -u '+%Y-%m-%d-%H-%M')
+echo Creating AMI ${image_name:?} from instance ${instance_id:?} for ${message_prefix:?} >&2
+
+# Stop the instance from running and wait until it is stopped.  Give up after
+# 10 minutes.
+
+echo Stopping ${instance_id:?} >&2
+aws ec2 stop-instances \
+	--region ${region:?} \
+	--instance-ids ${instance_id:?} > /dev/null
+
+giveup=$(date '+%s' -d '+10 minutes')
+prev_state=''
+while true
+do
+	state=$(
+		aws ec2 describe-instances \
+			--region ${region:?} \
+			--instance-id ${instance_id:?} \
+			--query 'Reservations[0].Instances[0].State.Name' \
+			--output text
+	)
+	if [[ "${state:?}" == stopped ]]
+	then
+		echo -e "\n${message_prefix:?} ${instance_id:?} has stopped" >&2
+		break
+	fi
+	if [ $(date '+%s') -gt ${giveup:?} ]
+	then
+		echo -e "\nError: ${message_prefix:?} ${instance_id:?} has not stopped after 10 minutes" >&2
+		exit 1
+	fi
+	if [[ "${prev_state}" != ${state:?} ]]
+	then
+		echo -en "\n${message_prefix:?} ${instance_id:?} is ${state:?} " >&2
+		prev_state=${state:?}
+	else
+		echo -n . >&2
+	fi
+	sleep 5
+done
+
+# The response from create-image looks like '{ "ImageId": "ami-61092a02" }'.
+# Extract just the image id.
+
+source_image_id=$(
+	echo $(
+		aws ec2 create-image \
+			--region ${region:?} \
+			--instance-id ${instance_id:?} \
+			--name ${image_name:?}
+		) | sed -e 's/"[^"]*$//; s/.*"//;'
+)
+echo ${image_name:?} ${source_image_id:?}

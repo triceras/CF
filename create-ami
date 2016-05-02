@@ -1,0 +1,39 @@
+#!/bin/bash
+
+# Create an AMI from an instance and propagate that AMI to all the regions that
+# we use.
+#
+# You can call the copy-ami-to-regions and permit-ami-to-accounts scripts
+# directly if you just want to add an existing AMI to a new region and/or
+# account.
+#
+# The calling environment must contain the required credentials for the account
+# that owns the instance.
+#
+# Parameters are:
+#   Region.
+#   AMI prefix.
+#   Instance id.
+#   Message prefix.
+#   Script to run after creating all the AMIs.
+
+set -e
+set -o pipefail
+
+region=${1:?"Missing region name"}
+ami_prefix=${2:?"Missing AMI prefix"}
+instance_id=${3:?"Missing instance id"}
+message_prefix=${4:?"Missing message prefix"}
+post_create_script=${5:?"Missing post create script"}
+shift 5
+
+result=($(./convert-instance-to-ami ${region:?} ${ami_prefix:?} ${instance_id:?} "${message_prefix:?}"))
+image_name=${result[0]}
+source_image_id=${result[1]}
+echo ${image_name:?} in ${region:?} is ${source_image_id:?}
+
+./copy-ami-to-regions ${region:?} ${image_name:?} ${source_image_id:?}
+
+./permit-ami-to-accounts ${image_name:?}
+
+${post_create_script:?}

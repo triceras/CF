@@ -1,0 +1,50 @@
+#!/bin/bash
+
+# Create a policy.
+#
+# The calling environment must contain the required credentials for the target
+# account.
+#
+# Parameters are:
+#   Policy name.
+#   Policy description.
+#   Policy body (JSON blob).
+
+# NOTE: This is a very basic script that is only designed to create a
+#       policy.  It is not designed to update existing policies.
+#
+#       In particular this script will not change any policy if the policy
+#       already exists.  If you want to change a policy then delete the
+#       existing policy through the AWS console and let this script create a
+#       clean version of the policy.
+#
+#       Before you delete any policies, read the WARNING below.
+
+# WARNING WARNING WARNING:
+#
+# Deleting a policy will break any entities that the policy is attached to.
+#
+# When you delete a policy through the console, that policy is detached from
+# all entities.  Recreating the policy does not automatically attach it to any
+# entities; attaching a policy to an instance is done through the cloud
+# formation scripts that create the entities.
+#
+# Even rerunning the CF script for the entities will not fix the problem
+# because, as far as CF is concerned, the CF template is up to date.  Another
+# example of the fact that CF cannot detect "manual" changes outside CF.
+# Either manually attach the recreated policy to the entities or delete the
+# clouds that build the entities and run CF to recreate them.
+
+set -e
+set -o pipefail
+
+policy_name=${1:?"Missing policy name"}
+description=${2:?"Missing policy description"}
+policy_body=${3:?"Missing policy body"}
+shift 3
+
+source ./functions
+
+policy_arn=arn:aws:iam::$(./map-account-number ${account:?}):policy/${policy_name:?}
+aws iam get-policy --policy-arn $policy_arn > /dev/null 2>&1 ||
+	aws iam create-policy --policy-name ${policy_name:?} --description "${description:?}" --policy-document "${policy_body:?}"

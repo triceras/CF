@@ -1,0 +1,10 @@
+# region version image_id
+ap-southeast-1 2016-04-15-04-50 ami-1b9e4a78
+ap-southeast-1 2016-04-22-03-44 ami-8c02d6ef
+ap-southeast-1 latest ami-8c02d6ef
+ap-southeast-2 2016-04-15-04-50 ami-31a68452
+ap-southeast-2 2016-04-22-03-44 ami-ec527f8f
+ap-southeast-2 latest ami-ec527f8f
+us-west-1 2016-04-15-04-50 ami-e4750a84
+us-west-1 2016-04-22-03-44 ami-43d3ac23
+us-west-1 latest ami-43d3ac23

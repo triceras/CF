@@ -1,0 +1,78 @@
+#!/bin/bash
+
+# Create or update a NAT gateway in an availability zone.
+#
+# Parameters are:
+#   Region.
+#   VPC stack name.
+#   Elastic IP stack name.
+#   Zone number.
+
+set -e
+set -o pipefail
+
+region=${1:?"Missing region name"}
+vpc_stack_name=${2:?"Missing VPC stack name"}
+elastic_ip_stack_name=${3:?"Missing elastic ip stack name"}
+zone_number=${4:?"Missing zone number"}
+shift 4
+
+STACK_NAME=nat-gateway-${zone_number}
+source ./functions
+
+# Get outputs from the stacks that this script or its children depend on.
+
+eval $(stack_outputs $vpc_stack_name)
+eval $(stack_outputs $elastic_ip_stack_name)
+
+zone_Suffix=$(zone_number_to_Suffix ${zone_number:?})
+
+# All elastic-ip stacks are named <region>-elastic-ip-<suffix>.  The allocation
+# id is in the stack output as EIP<suffix>AllocationId.
+
+eip_suffix=${elastic_ip_stack_name#*-elastic-ip-}
+eval allocation_id=\${EIP${eip_suffix:?}AllocationId:?}
+
+# NAT gateways are installed in the public subnet in each zone.  Routing table
+# updates will use the NAT gateway as the default gateway for private subnets
+# in the zone.
+
+eval public_subnet_id=\${VPCPublicSubnet${zone_Suffix:?}:?}
+eval private_subnet_id=\${VPCPrivateRouteTable${zone_Suffix:?}:?}
+
+resource=natgateway${zone_number:?}
+json_fragment << EODATA
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "Define the NAT gateway in an availability zone",
+
+  "Resources" : {
+    "${resource:?}": {
+      "Type" : "AWS::EC2::NatGateway",
+      "Properties" : {
+	"AllocationId" : "${allocation_id:?}",
+	"SubnetId" : "${public_subnet_id:?}"
+      }
+    },
+    "PrivateRoute$resource" : {
+      "DependsOn" : ["${resource:?}"],
+      "Type" : "AWS::EC2::Route",
+      "Properties" : {
+        "RouteTableId" : "${private_subnet_id:?}",
+        "DestinationCidrBlock" : "0.0.0.0/0",
+        "NatGatewayId" : { "Ref" : "${resource:?}" }
+      }
+    }
+  },
+
+  "Outputs" : {
+    "NATGatewayId${zone_number:?}": {
+      "Description" : "NAT gateway id",
+      "Value" : { "Ref" : "natgateway${zone_number:?}" }
+    }
+  }
+}
+EODATA
+
+build_stack

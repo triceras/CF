@@ -1,0 +1,11 @@
+delete security zones security-zone Trusted interfaces st0.3420
+delete interfaces st0.3420
+delete security ipsec vpn aws-us-2
+delete security ike gateway gw-aws-us-2
+delete security ike policy ike-pol-aws-us-2
+delete security zones security-zone Trusted interfaces st0.3410
+delete routing-options static route 10.34.0.0/16
+delete interfaces st0.3410
+delete security ipsec vpn aws-us-1
+delete security ike gateway gw-aws-us-1
+delete security ike policy ike-pol-aws-us-1

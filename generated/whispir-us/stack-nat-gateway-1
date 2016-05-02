@@ -1,0 +1,28 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  "Description" : "Define the NAT gateway in an availability zone",
+  "Resources" : {
+    "natgateway1": {
+      "Type" : "AWS::EC2::NatGateway",
+      "Properties" : {
+        "AllocationId" : "eipalloc-5d409338",
+        "SubnetId" : "subnet-dd70e8b8"
+      }
+    },
+    "PrivateRoutenatgateway1" : {
+      "DependsOn" : ["natgateway1"],
+      "Type" : "AWS::EC2::Route",
+      "Properties" : {
+        "RouteTableId" : "rtb-f31c9c96",
+        "DestinationCidrBlock" : "0.0.0.0/0",
+        "NatGatewayId" : { "Ref" : "natgateway1" }
+      }
+    }
+  },
+  "Outputs" : {
+    "NATGatewayId1": {
+      "Description" : "NAT gateway id",
+      "Value" : { "Ref" : "natgateway1" }
+    }
+  }
+}

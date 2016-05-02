@@ -1,0 +1,22 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  "Description" : "Create an elastic IP for NAT gateway - DO NOT DELETE!",
+  "Resources" : {
+    "ElasticIP" : {
+      "Type" : "AWS::EC2::EIP",
+      "Properties" : {
+        "Domain" : "VPC"
+      }
+    }
+  },
+  "Outputs" : {
+    "EIPnatgateway1PublicIP" : {
+      "Description" : "Public IP",
+      "Value" : { "Ref" : "ElasticIP" }
+    },
+    "EIPnatgateway1AllocationId" : {
+      "Description" : "Allocation Id",
+      "Value" : { "Fn::GetAtt" : [ "ElasticIP", "AllocationId" ] }
+    }
+  }
+}

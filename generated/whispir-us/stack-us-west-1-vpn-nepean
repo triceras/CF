@@ -1,0 +1,46 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  "Description" : "Add a VPN to an existing VPC/VGW",
+  "Resources" : {
+    "CustomerGateway" : {
+      "Type" : "AWS::EC2::CustomerGateway",
+      "Properties" : {
+        "Type" : "ipsec.1",
+        "BgpAsn" : "65034",
+        "IpAddress" : "203.45.17.178",
+        "Tags" : [
+          { "Key" : "Name", "Value" : "Gateway to Nepean DR"}
+        ]
+      }
+    },
+    "VPNConnection" : {
+      "DependsOn" : ["CustomerGateway"],
+      "Type" : "AWS::EC2::VPNConnection",
+      "Properties" : {
+        "Type" : "ipsec.1",
+        "StaticRoutesOnly" : "true",
+        "CustomerGatewayId" : { "Ref" : "CustomerGateway" },
+        "VpnGatewayId" : "vgw-66e8b523",
+        "Tags" : [{ "Key" : "Name", "Value" : "us-west-1-vpn-nepean" }]
+      }
+    },
+    "VPNConnectionRoute0A3C3C0018" : {
+      "DependsOn" : ["VPNConnection"],
+      "Type" : "AWS::EC2::VPNConnectionRoute",
+      "Properties" : {
+        "VpnConnectionId" : { "Ref" : "VPNConnection" },
+        "DestinationCidrBlock" : "10.60.60.0/24"
+      }
+    }
+  },
+  "Outputs" : {
+    "VPNCustomerGatewayId" : {
+      "Description" : "CustomerGateway Id",
+      "Value" : { "Ref" : "CustomerGateway" }
+    },
+    "VPNConnectionId" : {
+      "Description" : "VPNConnection Id",
+      "Value" : { "Ref" : "VPNConnection" }
+    }
+  }
+}

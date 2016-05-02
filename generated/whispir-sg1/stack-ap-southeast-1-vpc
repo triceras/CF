@@ -1,0 +1,279 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  "Description" : "Define our VPC with public and private subnets",
+  "Resources" : {
+    "VPC" : {
+      "Type" : "AWS::EC2::VPC",
+      "Properties" : {
+        "EnableDnsSupport" : true,
+        "EnableDnsHostnames" : false,
+        "CidrBlock" : "10.33.0.0/16",
+        "Tags" : [
+          { "Key" : "Name", "Value" : { "Ref" : "AWS::StackName" } }
+        ]
+      }
+    },
+    "InternetGateway" : {
+      "Type" : "AWS::EC2::InternetGateway",
+      "Properties" : {
+        "Tags" : [
+          { "Key" : "Name", "Value" : { "Ref" : "AWS::StackName" } }
+        ]
+      }
+    },
+    "GatewayToInternet" : {
+      "DependsOn" : ["VPC", "InternetGateway"],
+      "Type" : "AWS::EC2::VPCGatewayAttachment",
+      "Properties" : {
+        "VpcId" : { "Ref" : "VPC" },
+        "InternetGatewayId" : { "Ref" : "InternetGateway" }
+      }
+    },
+    "VPNGateway" : {
+      "Type" : "AWS::EC2::VPNGateway",
+      "Properties" : {
+        "Type" : "ipsec.1"
+      }
+    },
+    "VPNGatewayAttachment" : {
+      "DependsOn" : ["VPNGateway"],
+      "Type" : "AWS::EC2::VPCGatewayAttachment",
+      "Properties" : {
+        "VpcId" : { "Ref" : "VPC" },
+        "VpnGatewayId" : {"Ref" : "VPNGateway" }
+      }
+    },
+    "DHCPOptions" : {
+      "Type" : "AWS::EC2::DHCPOptions",
+      "Properties" : {
+        "DomainName" : "ap-southeast-1.sg1.internal",
+        "DomainNameServers" : [ "10.33.0.10, 10.33.64.10, AmazonProvidedDNS" ],
+        "Tags" : [
+          { "Key" : "Name", "Value" : { "Ref" : "AWS::StackName" } }
+        ]
+      }
+    },
+    "VPCDHCPOptionsAssociation" : {
+      "Type" : "AWS::EC2::VPCDHCPOptionsAssociation",
+      "Properties" : {
+        "DhcpOptionsId" : { "Ref" : "DHCPOptions" },
+        "VpcId" : { "Ref" : "VPC" }
+      }
+    },
+    "PublicSubnetA" : {
+      "DependsOn" : ["VPC"],
+      "Type" : "AWS::EC2::Subnet",
+      "Properties" : {
+        "VpcId" : { "Ref" : "VPC" },
+        "AvailabilityZone": "ap-southeast-1a",
+        "MapPublicIpOnLaunch": true,
+        "CidrBlock" : "10.33.0.0/19",
+        "Tags" : [
+          { "Key" : "Name", "Value" : "Public A" }
+        ]
+      }
+    },
+    "PublicRouteTableA" : {
+      "DependsOn" : ["VPC"],
+      "Type" : "AWS::EC2::RouteTable",
+      "Properties" : {
+        "VpcId" : { "Ref" : "VPC" },
+        "Tags" : [
+          { "Key" : "Name", "Value" : "Public A" }
+        ]
+      }
+    },
+    "PublicSubnetRouteTableAssociationA" : {
+      "DependsOn" : ["PublicSubnetA", "PublicRouteTableA"],
+      "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties" : {
+        "SubnetId" : { "Ref" : "PublicSubnetA" },
+        "RouteTableId" : { "Ref" : "PublicRouteTableA" }
+      }
+    },
+    "PublicRouteA" : {
+      "DependsOn" : ["PublicSubnetRouteTableAssociationA", "InternetGateway"],
+      "Type" : "AWS::EC2::Route",
+      "Properties" : {
+        "RouteTableId" : { "Ref" : "PublicRouteTableA" },
+        "DestinationCidrBlock" : "0.0.0.0/0",
+        "GatewayId" : { "Ref" : "InternetGateway" }
+      }
+    },
+    "PrivateRouteTableA" : {
+      "DependsOn" : ["VPC"],
+      "Type" : "AWS::EC2::RouteTable",
+      "Properties" : {
+        "VpcId" : { "Ref" : "VPC" },
+        "Tags" : [
+          { "Key" : "Name", "Value" : "Private A" }
+        ]
+      }
+    },
+    "PrivateSubnetA" : {
+      "DependsOn" : ["VPC"],
+      "Type" : "AWS::EC2::Subnet",
+      "Properties" : {
+        "VpcId" : { "Ref" : "VPC" },
+        "AvailabilityZone": "ap-southeast-1a",
+        "MapPublicIpOnLaunch": false,
+        "CidrBlock" : "10.33.32.0/19",
+        "Tags" : [
+          { "Key" : "Name", "Value" : "Private A" }
+        ]
+      }
+    },
+    "PrivateSubnetRouteTableAssociationA" : {
+      "DependsOn" : ["PrivateSubnetA", "PrivateRouteTableA"],
+      "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties" : {
+        "SubnetId" : { "Ref" : "PrivateSubnetA" },
+        "RouteTableId" : { "Ref" : "PrivateRouteTableA" }
+      }
+    },
+    "PublicSubnetB" : {
+      "DependsOn" : ["VPC"],
+      "Type" : "AWS::EC2::Subnet",
+      "Properties" : {
+        "VpcId" : { "Ref" : "VPC" },
+        "AvailabilityZone": "ap-southeast-1b",
+        "MapPublicIpOnLaunch": true,
+        "CidrBlock" : "10.33.64.0/19",
+        "Tags" : [
+          { "Key" : "Name", "Value" : "Public B" }
+        ]
+      }
+    },
+    "PublicRouteTableB" : {
+      "DependsOn" : ["VPC"],
+      "Type" : "AWS::EC2::RouteTable",
+      "Properties" : {
+        "VpcId" : { "Ref" : "VPC" },
+        "Tags" : [
+          { "Key" : "Name", "Value" : "Public B" }
+        ]
+      }
+    },
+    "PublicSubnetRouteTableAssociationB" : {
+      "DependsOn" : ["PublicSubnetB", "PublicRouteTableB"],
+      "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties" : {
+        "SubnetId" : { "Ref" : "PublicSubnetB" },
+        "RouteTableId" : { "Ref" : "PublicRouteTableB" }
+      }
+    },
+    "PublicRouteB" : {
+      "DependsOn" : ["PublicSubnetRouteTableAssociationB", "InternetGateway"],
+      "Type" : "AWS::EC2::Route",
+      "Properties" : {
+        "RouteTableId" : { "Ref" : "PublicRouteTableB" },
+        "DestinationCidrBlock" : "0.0.0.0/0",
+        "GatewayId" : { "Ref" : "InternetGateway" }
+      }
+    },
+    "PrivateRouteTableB" : {
+      "DependsOn" : ["VPC"],
+      "Type" : "AWS::EC2::RouteTable",
+      "Properties" : {
+        "VpcId" : { "Ref" : "VPC" },
+        "Tags" : [
+          { "Key" : "Name", "Value" : "Private B" }
+        ]
+      }
+    },
+    "PrivateSubnetB" : {
+      "DependsOn" : ["VPC"],
+      "Type" : "AWS::EC2::Subnet",
+      "Properties" : {
+        "VpcId" : { "Ref" : "VPC" },
+        "AvailabilityZone": "ap-southeast-1b",
+        "MapPublicIpOnLaunch": false,
+        "CidrBlock" : "10.33.96.0/19",
+        "Tags" : [
+          { "Key" : "Name", "Value" : "Private B" }
+        ]
+      }
+    },
+    "PrivateSubnetRouteTableAssociationB" : {
+      "DependsOn" : ["PrivateSubnetB", "PrivateRouteTableB"],
+      "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties" : {
+        "SubnetId" : { "Ref" : "PrivateSubnetB" },
+        "RouteTableId" : { "Ref" : "PrivateRouteTableB" }
+      }
+    },
+    "VPNGatewayRoutePropagation" : {
+      "Type" : "AWS::EC2::VPNGatewayRoutePropagation",
+      "DependsOn" : ["VPNGatewayAttachment"],
+      "Properties" : {
+        "RouteTableIds" : [ { "Ref" : "PublicRouteTableA" }, { "Ref" : "PrivateRouteTableA" }, { "Ref" : "PublicRouteTableB" }, { "Ref" : "PrivateRouteTableB" } ],
+        "VpnGatewayId" : {"Ref" : "VPNGateway" }
+      }
+    }
+  },
+  "Outputs" : {
+    "VPCID" : {
+      "Description" : "VPC ID",
+      "Value" : { "Ref" : "VPC" }
+    },
+    "VPCVPNGatewayId" : {
+      "Value" : { "Ref" : "VPNGateway" }
+    },
+    "VPCRegion" : {
+      "Description" : "The region for this VPC",
+      "Value" : { "Ref" : "AWS::Region" }
+    },
+    "VPCAccountId" : {
+      "Description" : "The account id for this VPC",
+      "Value" : "537355466014"
+    },
+    "VPCAccountName" : {
+      "Description" : "The account name for this VPC",
+      "Value" : "whispir-sg1"
+    },
+    "VPCNetworkBase" : {
+      "Description" : "The network base value for this VPC",
+      "Value" : "33"
+    },
+    "VPCZones" : {
+      "Description" : "The zones that this VPC is defined in",
+      "Value" : "A B"
+    },
+    "VPCDomain" : {
+      "Description" : "Domain for this account",
+      "Value" : "ap-southeast-1.sg1.internal"
+    },
+    "VPCPublicSubnetA" : {
+      "Description" : "Public subnet A",
+      "Value" : { "Ref" : "PublicSubnetA" }
+    },
+    "VPCPrivateSubnetA" : {
+      "Description" : "Private subnet A",
+      "Value" : { "Ref" : "PrivateSubnetA" }
+    },
+    "VPCPublicRouteTableA" : {
+      "Description" : "Public route table A",
+      "Value" : { "Ref" : "PublicRouteTableA" }
+    },
+    "VPCPrivateRouteTableA" : {
+      "Description" : "Private route table A",
+      "Value" : { "Ref" : "PrivateRouteTableA" }
+    },
+    "VPCPublicSubnetB" : {
+      "Description" : "Public subnet B",
+      "Value" : { "Ref" : "PublicSubnetB" }
+    },
+    "VPCPrivateSubnetB" : {
+      "Description" : "Private subnet B",
+      "Value" : { "Ref" : "PrivateSubnetB" }
+    },
+    "VPCPublicRouteTableB" : {
+      "Description" : "Public route table B",
+      "Value" : { "Ref" : "PublicRouteTableB" }
+    },
+    "VPCPrivateRouteTableB" : {
+      "Description" : "Private route table B",
+      "Value" : { "Ref" : "PrivateRouteTableB" }
+    }
+  }
+}

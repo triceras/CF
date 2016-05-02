@@ -1,0 +1,106 @@
+#!/bin/bash
+
+# Create or update common security groups.
+#
+# The calling environment must contain the required credentials for the target
+# account.
+#
+# Parameters are:
+#   Region.
+#   VPC stack name.
+
+set -e
+set -o pipefail
+
+region=${1:?"Missing region name"}
+vpc_stack_name=${2:?"Missing VPC stack name"}
+shift 2
+
+source ./functions
+
+get_vpc_data ${vpc_stack_name:?}
+
+json_fragment << 'EODATA'
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "Define the common security groups for a VPC",
+
+  "Parameters" : {
+EODATA
+
+json_fragment < office-ips
+
+json_fragment << 'EODATA'
+  },
+
+  "Resources" : {
+EODATA
+
+sg SSHVPC "SSH from hosts in VPC: TESTING ONLY"
+ipingress SSHVPC 22 $vpc_hosts
+
+sg ICMPExternal "ICMP from external hosts"
+ipingress ICMPExternal -1 0.0.0.0/0 -1 icmp
+
+sg mail "Mail servers security group"
+ipingress mail 25 0.0.0.0/0
+
+sg AllTCP "TCP from anywhere: TESTING ONLY"
+ipingress AllTCP 0 0.0.0.0/0 65535 tcp
+
+sg AllUDP "UDP from anywhere: TESTING ONLY"
+ipingress AllUDP 0 0.0.0.0/0 65535 udp
+
+sg AllICMP "ICMP from anywhere: TESTING ONLY"
+ipingress AllICMP -1 0.0.0.0/0 -1 icmp
+
+sg AllTraffic "All traffic from anywhere: TESTING ONLY"
+ipingress AllTraffic '' 0.0.0.0/0 '' -1
+
+sg PuppetMasterServer "Puppetmaster server"
+
+sg ZabbixServer "Local Zabbix server"				# SYS-2627
+ipingress ZabbixServer 10050 $vpc_hosts				# For client to server sessions zabbix push
+ipingress ZabbixServer 10051 $vpc_hosts				# For client to server sessions zabbix push
+
+sg WebserverOffice "HTTP and HTTPS from office"			# SYS-2627
+ipingress WebserverOffice 443 OfficeInternalPort1
+ipingress WebserverOffice 443 OfficeInternalPort2
+ipingress WebserverOffice 443 OfficeInternalPort4
+
+sg HTTPSExternal "HTTPS from external hosts"			# SYS-2627
+ipingress HTTPSExternal 443 0.0.0.0/0
+
+sg CommonInternal "Common access from internal hosts to all AWS hosts"	# SYS-2627
+sgingress CommonInternal 10050 ZabbixServer
+ipingress CommonInternal 10050 OfficeInternalPort1
+ipingress CommonInternal 10050 OfficeInternalPort2
+ipingress CommonInternal 10050 OfficeInternalPort4
+sgingress CommonInternal 10051 ZabbixServer
+ipingress CommonInternal 10051 OfficeInternalPort1
+ipingress CommonInternal 10051 OfficeInternalPort2
+ipingress CommonInternal 10051 OfficeInternalPort4
+# SSH from office
+ipingress CommonInternal 22 OfficeExternal
+ipingress CommonInternal 22 OfficeInternalPort1
+ipingress CommonInternal 22 OfficeInternalPort2
+ipingress CommonInternal 22 OfficeInternalPort4
+# Ping from internal hosts
+ipingress CommonInternal -1 10.0.0.0/8 -1 icmp
+
+json_fragment << 'EODATA'
+
+  },
+
+  "Outputs" : {
+EODATA
+
+sg_outputs SEC
+
+json_fragment << 'EODATA'
+  }
+}
+EODATA
+
+build_stack

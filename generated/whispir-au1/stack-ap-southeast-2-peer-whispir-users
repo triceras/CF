@@ -1,0 +1,38 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  "Description" : "Define the peer routes from whispir-au1 to whispir-users",
+  "Resources" : {
+    "PeerRoutertbe892078d" : {
+      "Type" : "AWS::EC2::Route",
+      "Properties" : {
+        "RouteTableId" : "rtb-e892078d",
+        "DestinationCidrBlock" : "10.35.0.0/16",
+        "VpcPeeringConnectionId" : "pcx-0efb3467"
+      }
+    },
+    "PeerRoutertb9b9d13fe" : {
+      "Type" : "AWS::EC2::Route",
+      "Properties" : {
+        "RouteTableId" : "rtb-9b9d13fe",
+        "DestinationCidrBlock" : "10.35.0.0/16",
+        "VpcPeeringConnectionId" : "pcx-0efb3467"
+      }
+    },
+    "PeerRoutertbe992078c" : {
+      "Type" : "AWS::EC2::Route",
+      "Properties" : {
+        "RouteTableId" : "rtb-e992078c",
+        "DestinationCidrBlock" : "10.35.0.0/16",
+        "VpcPeeringConnectionId" : "pcx-0efb3467"
+      }
+    },
+    "PeerRoutertb989d13fd" : {
+      "Type" : "AWS::EC2::Route",
+      "Properties" : {
+        "RouteTableId" : "rtb-989d13fd",
+        "DestinationCidrBlock" : "10.35.0.0/16",
+        "VpcPeeringConnectionId" : "pcx-0efb3467"
+      }
+    }
+  }
+}

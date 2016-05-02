@@ -1,0 +1,100 @@
+#!/bin/bash
+
+set -e
+set -o pipefail
+
+resource="${1:?"Missing resource name"}"
+
+# CF restricts resource names to letters and digits.  Some hostnames include
+# '-' so allow for a separate hostname parameter.  If you do override the
+# hostname, remember that this just sets the internal name, the external name
+# is taken from the CF tag.  Make sure that the internal and external names
+# match, unless you like being really confused.
+
+hostname="${2:-"$resource"}"
+
+# The base MetaData config set.  Used by all instances.
+#
+# * Set up cfn-hup to detect changes to MetaData.
+# * Delete sendmail if it is installed.  A later config set will install
+#   Postfix, depending on the type of server.
+# * Use nc to send a message to the first NAT instance in this region, but only
+#   once per boot.  The NAT instance will use that message to trigger a DNS
+#   refresh.  The first NAT instance will be listening on port 42 (nameserver)
+#   for any trigger messages.
+
+source ./functions
+
+json_fragment << EODATA
+	  "base" : {
+	    "files" : {
+	      "/etc/cfn/cfn-hup.conf" : {
+		"content" : { "Fn::Join" : ["", [
+		  "[main]", "\n",
+		  "stack=", { "Ref" : "AWS::StackId" }, "\n",
+		  "region=", { "Ref" : "AWS::Region" }, "\n",
+		  "interval=1"
+		  ]]
+                }
+	      },
+	      "/etc/cfn/hooks.d/cfn-auto-reloader.conf" : {
+		"content": { "Fn::Join" : ["", [
+		  "[cfn-auto-reloader-hook]\n",
+		  "triggers=post.update\n",
+		  "path=Resources.$resource.Metadata.AWS::CloudFormation::Init\n",
+		  "action=/opt/aws/bin/cfn-init -v -s ", { "Ref" : "AWS::StackId" },
+				     " -r $resource",
+				     " --region ", { "Ref" : "AWS::Region" },
+				     "\n"
+		  ]]
+                }
+	      },
+EODATA
+
+export VPCNameServer1=$(util1)
+export VPCNameServer2=$(util2)
+variable_file /etc/sysconfig/network-scripts/VPCData 000644
+
+./generate-etc-sysconfig-network ${hostname,,}.${VPCDomain:?} | add_file /etc/sysconfig/network 000644
+
+# If /etc/sysconfig/network has a HOSTNAME other than localdomain then make
+# sure the hostname is set.  This is a command because /etc/sysconfig/network
+# is installed as part of the files above.
+
+json_fragment << 'EODATA'
+	    # end of files
+	    },
+	    "commands" : {
+	      "010" : {
+		"command" : "yum erase -y sendmail",
+		"ignoreErrors" : "true"
+	      },
+	      "020" : {
+		"command" : "sed -ne '/localdomain/d; s/^HOSTNAME=/hostname /p' /etc/sysconfig/network | sh"
+	      },
+	      "030" : {
+		"command" : "service boot_signal restart"
+	      },
+	      # Restart the network to fix the DHCP settings (SYS-3337), but
+	      # only if there is more than one search parameter in
+	      # /etc/resolv.conf.
+	      "040" : {
+		"command" : "service network restart",
+		"test" : "grep -q '^search\\s\\+\\S\\+\\s' /etc/resolv.conf"
+	      },
+	      # Pick up the new hostname in syslog
+	      "050" : {
+		"command" : "service rsyslog restart"
+	      }
+	    },
+	    "services" : {
+	      "sysvinit" : {
+		"cfn-hup" : {
+		  "enabled" : "true",
+                  "ensureRunning" : "true",
+		  "files" : [ "/etc/cfn/cfn-hup.conf", "/etc/cfn/hooks.d/cfn-auto-reloader.conf" ]
+		}
+	      }
+	    }
+	  },
+EODATA

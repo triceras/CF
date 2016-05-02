@@ -1,0 +1,65 @@
+#!/bin/sh
+#
+# boot_signal Send a signal to the name servers when this system boots
+#
+# chkconfig: 2345 12 88
+# description: Send a signal to the name servers when this system boots
+#
+### BEGIN INIT INFO
+# Provides: boot_signal
+# Required-Start:
+# Required-Stop:
+# Default-Start: 2 3 4 5
+# Default-Stop: 0 1 6
+# Short-Description: Send a signal to the name servers when this system boots
+# Description: Send a signal to the name servers when this system boots. Also
+#              update /etc/hosts with the latest ip, hostname and domain for
+#              this host.
+### END INIT INFO
+
+# Source function library.
+. /etc/init.d/functions
+
+source /etc/sysconfig/network-scripts/VPCData
+
+start() {
+  ret=0
+  # Just send a blank line (stdin is '') to both VPC name servers.
+  nc -w 10 ${VPCNameServer1?} 42 <<<''
+  nc -w 10 ${VPCNameServer2?} 42 <<<''
+  hostname=$(sed -ne 's/^path=Resources.\([^.]*\).Metadata.AWS::CloudFormation::Init$/\1/p;' /etc/cfn/hooks.d/cfn-auto-reloader.conf 2>/dev/null | tr '[A-Z]' '[a-z]')
+  domain=$(sed -ne 's/^search //p;' /etc/resolv.conf)
+  ip=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
+  if [[ -n "$hostname" && -n "$domain" && -n "$ip" ]]
+  then
+    sed -i -e "/^$ip\>/d" /etc/hosts
+    echo "$ip $hostname.$domain $hostname" >> /etc/hosts
+  else
+    echo "Not updating /etc/hosts, insufficient data: ip $ip, hostname $hostname, domain $domain" >&2
+    ret=1
+  fi
+  if [ $ret -eq 0 ]; then
+    success; echo
+  else
+    failure; echo; return $ret
+  fi
+}
+
+stop() {
+  # Not a long running service, nothing to stop
+  return 0
+}
+
+restart() {
+  stop
+  start
+}
+
+case "$1" in
+  start) start; RETVAL=$?; ;;
+  stop) stop; RETVAL=$?; ;;
+  restart|force-reload|reload) restart; RETVAL=$?; ;;
+  *) echo "Usage: boot_signal {start|stop|restart|force_reload|reload}"; RETVAL=2; ;;
+esac
+
+exit $RETVAL

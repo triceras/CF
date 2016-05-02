@@ -1,0 +1,24 @@
+#!/bin/bash
+
+# Create network for whispir-au1
+
+set -e
+set -o pipefail
+
+export account=whispir-au1
+source ./network-variables
+./network.common
+
+# Extra work for whispir-au1.  It holds the puppetmasters for all the non-AWS
+# locations.
+
+source ./sts-assume-admin $account
+
+echo "Puppet master office"
+./create-puppetmaster $region $region-puppetmaster-office $region-vpc $region-common-security 1 puppet-office PuppetMasterOffice '10.1.161.0/24 10.1.162.0/24 10.1.163.0/24'
+
+echo "Puppet master King St"
+./create-puppetmaster $region $region-puppetmaster-king-st $region-vpc $region-common-security 1 puppet-king-st PuppetMasterKingSt '10.50.50.0/23'
+
+echo "Puppet master Nepean DR"
+./create-puppetmaster $region $region-puppetmaster-nepean-dr $region-vpc $region-common-security 1 puppet-nepean-dr PuppetMasterNepeanDR '10.60.60.0/23'

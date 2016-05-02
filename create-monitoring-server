@@ -1,0 +1,120 @@
+#!/bin/bash
+
+# Create or update a monitoring server instance.
+#
+# The calling environment must contain the required credentials for the target
+# account.
+#
+# Parameters are:
+#   Region.
+#   My stack name.
+#   VPC stack name.
+#   Common security stack name.
+#   Zone number for this instance.
+
+set -e
+set -o pipefail
+
+region=${1:?"Missing region name"}
+STACK_NAME=${2:?"Missing stack name"}
+vpc_stack_name=${3:?"Missing VPC stack name"}
+common_security_stack_name=${4:?"Missing common security stack name"}
+zone_number=${5:?"Missing zone number"}
+shift 5
+
+export operatingsystem=RHEL
+
+source ./functions
+
+eval $(stack_outputs $vpc_stack_name)
+eval $(stack_outputs $common_security_stack_name)
+
+resource=mon1
+zone_Suffix=$(zone_number_to_Suffix ${zone_number:?})
+image_id=$(./choose-ami ${resource:?} generated/${account:?}/stack-${stack_name:?} ${region:?} generated/rhel7-golden-list)
+
+# If we rebuild the monitoring server we want to keep some of the data.  Create
+# a persistent volume to hold this data.
+
+./create-persistent-volume ${region:?} ${stack_name:?}-volume ${zone_number:?} ${resource:?}-persistent 120
+eval $(stack_outputs ${stack_name:?}-volume)
+
+json_fragment << 'EODATA'
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "Define a monitoring instance",
+
+  "Parameters" : {
+EODATA
+
+json_fragment < keypairname
+
+json_fragment << 'EODATA'
+  },
+
+  "Resources" : {
+EODATA
+
+vpc_hosts=$(cidr 0 16)
+
+json_fragment << EODATA
+    "$resource" : {
+      "Type" : "AWS::EC2::Instance",
+      "CreationPolicy" : {
+	"ResourceSignal" : {
+	  "Timeout" : "PT20M"
+	}
+      },
+
+      "Metadata" : {
+	"AWS::CloudFormation::Init" : {
+
+	  "configSets" : {
+	    "default"    : [ "base", "puppetrole", "puppetagent" ]
+	  },
+EODATA
+
+EXISTING_JSON_FILE=${JSON_FILE} ./configset-base $resource $resource
+
+puppetrole monitoring
+puppetagent
+
+json_fragment << 'EODATA'
+	# End of AWS::CloudFormation::Init
+	}
+      # End of Metadata
+      },
+EODATA
+
+json_fragment << EODATA
+
+      "Properties" : {
+        "InstanceType" : "c4.xlarge",
+	"DisableApiTermination" : "false",
+        "KeyName"  : { "Ref" : "KeyPairName" },
+        "ImageId" : "${image_id:?}",
+        "NetworkInterfaces" : [{
+          "GroupSet"                 : [ "${SECCommonInternal:?}", "${SECZabbixServer:?}", "${SECHTTPSExternal:?}" ],
+          "DeviceIndex"              : "0",
+          "DeleteOnTermination"      : "true",
+          "SubnetId"                 : "$(eval echo \${VPCPublicSubnet$zone_Suffix:?})"
+        }],
+	"Volumes" : [
+	  { "VolumeId" : "${VolumeId:?}", "Device" : "/dev/sdc" }
+	],
+        "Tags" : [
+          { "Key" : "Name", "Value" : "$resource" }
+        ],
+EODATA
+
+./userdata-rhel7-golden ${resource:?} ${resource:?} ${stack_name:?} | json_fragment
+
+json_fragment << 'EODATA'
+      }
+    }
+  }
+}
+EODATA
+
+build_stack

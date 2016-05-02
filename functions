@@ -1,0 +1,558 @@
+# Common set up code.
+
+mkdir -p generated
+[[ -z "$account" ]] || mkdir -p generated/${account:?}
+
+script=${0##*/}
+script_suffix=${script#create-}
+if [[ -n "$STACK_NAME" ]]
+then
+	stack_name=$STACK_NAME
+elif [[ -n "$region" ]]
+then
+	stack_name=${region}-${script_suffix:?"Missing script suffix"}
+else
+	stack_name=${script_suffix:?"Missing script suffix"}
+fi
+
+if [[ -z "$NO_JSON_FILE" ]]
+then
+	if [[ -z "$EXISTING_JSON_FILE" ]]
+	then
+		: ${JSON_FILE=/tmp/${script:?"Missing script name"}-$$.json}
+		: > "$JSON_FILE"
+	else
+		JSON_FILE=${EXISTING_JSON_FILE}
+	fi
+fi
+
+# Set variables that vary between operating systems.
+
+if [[ "$operatingsystem" == Amazon ]]
+then
+	export package_puppet=puppet3
+	export package_nc=nc
+else
+	export package_puppet=puppet
+	export package_nc=nmap-ncat
+fi
+
+# Common functions.  Some of them assume that you have defined variables in
+# your environment.
+
+cidr() {
+	block=${1:?"Missing cidr block"}
+	mask=${2:?"Missing cidr mask"}
+	# block can be an expression
+	block=$(($block))
+	echo "10.${network_base:?}.$block.0/$mask"
+}
+
+# Issue commands to set network_base and vpc_hosts in the parent environment.
+
+get_vpc_data() {
+	eval $(stack_outputs ${1:?})
+	export network_base=${VPCNetworkBase:?}
+	export vpc_hosts=$(cidr 0 16)
+}
+
+cf_host() {
+	block=${1:?"Missing subnet block"}
+	host=${2:?"Missing host IP"}
+	# block can be an expression
+	block=$(($block))
+	echo "10.${network_base:?}.$block.$host"
+}
+
+nat1() {
+	cf_host 0 10
+}
+
+nat2() {
+	cf_host 64 10
+}
+
+util1() {
+	cf_host 0 10
+}
+
+util2() {
+	cf_host 64 10
+}
+
+# Take all the outputs from a stack and generate commands to put them into the
+# environment.
+
+stack_outputs() {
+	aws cloudformation describe-stacks --region ${region:?} --stack-name ${1:?"Missing stack name"} --output text |
+		awk -F'\t' '/OUTPUTS/{printf("export %s=\"%s\"\n", $3, $4)}'
+}
+
+# Convert the route to 5 hex fields to make a unique label.
+
+route_label() {
+	r=${1:?"Missing route value"}
+	r="${r//./ }"
+	r="${r//\// }"
+	printf "%02X%02X%02X%02X%02X" $r
+}
+
+: ${GLOBAL_REGION=us-east-1}
+: ${CENTRAL_ACCOUNT=whispir-users}
+
+region_list() {
+	aws ec2 --region ${GLOBAL_REGION:?} describe-regions --query Regions[*].RegionName --output text
+}
+
+export_credentials() {
+	awk '/CREDENTIALS/{printf "export AWS_ACCESS_KEY_ID=\"%s\"\nexport AWS_SECRET_ACCESS_KEY=\"%s\"\nexport AWS_SECURITY_TOKEN=\"%s\"\n", $2, $4, $5}'
+}
+
+# Append a fragment to the JSON file.  Tabs are expanded, trailing white space
+# and blank lines are removed.  Comment lines are removed.
+#
+# As a bonus, if the fragment starts with ']' or '}' and the last line in the
+# JSON file ends in ',' then strip the trailing ',' from the file before
+# appending the fragment.  This is a hackish workaround for the problem of
+# repeating sections followed by the end of the section.
+
+json_fragment() {
+	[[ -z "$SHOW_JSON_FILE" ]] || echo JSON_FILE $JSON_FILE
+	fragment="$(expand | sed -e 's/\s\+$//; /^$/d; /^\s*#/d;')"
+	if [[ "$fragment" =~ ^\ *[]}] ]]
+	then
+		sed -i -e '$s/,$//' "${JSON_FILE:?}"
+	fi
+	cat << EODATA >> "${JSON_FILE:?}"
+$fragment
+EODATA
+}
+
+# Insert a file fragment into an AWS::CloudFormation::Init files section.  The
+# input fragment is plain text.  Special JSON characters are escaped, newlines
+# are replaced with '\n'.  Each file fragment is therefore replaced with a
+# single long string with embedded newlines.
+
+file_fragment() {
+	sed -e 's/\\/\\\\/g; s/"/\\"/g;' |
+	tr '\n' $'\x01' |
+	sed -e 's/^/"/; s/$/",/; s/\x01/\\n/g;' |
+	json_fragment
+}
+
+# Add a file from stdin to the json file.  Input is from stdin.
+#
+# Parameters:
+#
+#   Target file name.
+#   Mode.
+#   Group (optional).
+
+add_file() {
+	set -e
+	if [[ ! "${1:?}" =~ ^/ || "$1" =~ ^// ]]
+	then
+		echo add_file name "$1" is illegal
+		return 1
+	fi
+
+	json_fragment << EODATA
+              "$1" : {
+                "content" : { "Fn::Join" : ["", [
+EODATA
+
+	file_fragment	# Reads from the stdin supplied to this function
+
+	[[ -z "$3" ]] || __group=", \"group\" : \"$3\""
+
+	json_fragment << EODATA
+                  ]]
+                },
+                "mode" : "${2:?}"${__group}
+              },
+EODATA
+}
+
+check_local_file() {
+	if [[ ! "${1:?}" =~ ^/ || "$1" =~ ^// ]]
+	then
+		echo $2 target name "$1" is illegal
+		return 1
+	fi
+	local="${1#/}"
+	if [[ ! -f "$local" ]]
+	then
+		echo $2 local name "$local" is not a file
+		return 1
+	fi
+}
+
+# Add a file with fixed contents to the json file.
+#
+# Parameters:
+#
+#   Target file name.  The contents are in a local file with the same name without the leading '/',
+#   Mode.
+
+fixed_file() {
+	set -e
+	check_local_file "$1" fixed_file
+	local="${1#/}"
+	add_file "$1" "$2" < "$local"
+}
+
+# Add a file with variable contents to the json file.  Input is from an
+# existing file.
+#
+# Parameters:
+#
+#   Target file name.  The contents are in a local file with the same name without the leading '/',
+#   Mode.
+
+variable_file() {
+	set -e
+	check_local_file "$1" variable_file
+	local="${1#/}"
+	LOCAL_FILE="$local" ./variable_fragment.pl < "$local" | add_file "$1" "$2"
+}
+
+# Convert a bash list to a JSON array list.  Each element of the bash list is
+# quoted and elements are separated by ', '.
+
+bash_list_to_json() {
+	set -e
+	[ $# -eq 1 ] || (echo Too many arguments to bash_list_to_json >&2; exit 1)
+	echo "\"$(echo "${1:?}" | sed -e 's/^ *//; s/ *$//; s/ /", "/g;')\""
+}
+
+
+# Useful functions for creating and defining security groups
+
+# Create a security group.
+#
+# Parameters:
+#   Security group name.  It is also used as the JSON key, so it must satisfy AWS rules for JSON keys.
+#   Description.
+
+declare -A __sglist
+
+sg() {
+	sg=${1:?}
+	desc="${2:?}"
+	json_fragment << EODATA
+    "${sg}" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "${desc}",
+        "VpcId" : "$VPCID",
+        "Tags" : [
+          { "Key" : "Name", "Value" : "${sg}" }
+        ]
+      }
+    },
+EODATA
+	__sglist["${sg}"]="$desc"
+}
+
+# Generate the labels for the from and to port numbers and the protocol.
+
+set_labels() {
+	if [[ "$fromport" == "-1" ]]
+	then
+		fromport_label=all
+	else
+		fromport_label=$fromport
+	fi
+	if [[ "$toport" == "-1" ]]
+	then
+		toport_label=all
+	else
+		toport_label=$fromport
+	fi
+	if [[ "$proto" == "-1" ]]
+	then
+		proto_label=all
+	else
+		proto_label=$proto
+	fi
+}
+
+# Define a single ingress rule for a security group when the ingress comes
+# from another security group.
+#
+# Parameters:
+#   Security group to update.
+#   From port number.
+#   From security group name or id.
+#   To port number.  Default is the same as the from port.
+#   Protocol.  Default is tcp.
+
+sgingress() {
+	sg=${1:?}
+	fromport=${2}
+	fromsg=${3:?}
+	if [[ $fromsg =~ sg- ]]
+	then
+		fromsg_label=${fromsg/-/}
+		fromsg="\"${fromsg}\""
+	else
+		fromsg_label=${fromsg}
+		fromsg='{ "Fn::GetAtt": [ "'${fromsg}'", "GroupId" ] }'
+	fi
+	toport=${4-$2}
+	proto=${5-tcp}
+	set_labels
+	json_fragment << EODATA
+    "sgingress${proto_label}${sg}${fromport_label}${fromsg_label}${toport_label}" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+	"IpProtocol" : "${proto}",
+	"FromPort" : "${fromport}",
+	"ToPort" : "${toport}",
+	"SourceSecurityGroupId" : $fromsg,
+	"GroupId" : { "Fn::GetAtt": [ "${sg}", "GroupId" ] }
+      }
+    },
+EODATA
+}
+
+# Define a single ingress rule for a security group when the ingress comes
+# from a cidr range.
+#
+# Parameters:
+#   Security group to update.
+#   From port number.
+#   From cidr.  If this is a name then it is used as the target of a Ref,
+#   normally the name of a parameter.  Otherwise it is a cidr as a.b.c.d/mask.
+#   To port number.  Default is the same as the from port.
+#   Protocol.  Default is tcp.
+
+ipingress() {
+	sg=${1:?}
+	fromport=${2}
+	cidr=${3:?}
+	if [[ "$cidr" =~ ^[A-Za-z0-9]+$ ]]
+	then
+		cidr_label=${cidr}
+		cidr='{ "Ref" : "'${cidr}'" }'
+	else
+		cidr_label=$(route_label ${cidr})
+		cidr=\"${cidr}\"
+	fi
+	toport=${4-$2}
+	proto=${5-tcp}
+	set_labels
+	json_fragment << EODATA
+    "ipingress${proto_label}${sg}${fromport_label}${cidr_label}${toport_label}" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+	"IpProtocol" : "${proto}",
+	"FromPort" : "${fromport}",
+	"ToPort" : "${toport}",
+	"CidrIp" : $cidr,
+	"GroupId" : { "Fn::GetAtt": [ "${sg}", "GroupId" ] }
+      }
+    },
+EODATA
+}
+
+# Generate an output definition for each security group defined by sg.
+#
+# Parameters:
+#   Optional prefix for the output name.
+
+sg_outputs() {
+	prefix=${1?}
+	for k in ${!__sglist[@]}
+	do
+		json_fragment << EODATA
+    "$prefix$k" : {
+      "Description" : "${__sglist[$k]}",
+      "Value" : { "Ref" : "$k" }
+    },
+EODATA
+	done
+}
+
+# Ephemeral port number range for Linux hosts
+
+linux_ephemeral_from=32768
+linux_ephemeral_to=61000
+
+# RFC1918 private networks
+
+rfc1918="10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
+
+# All routing table ids in a VPC
+
+routing_table_ids() {
+	for z in ${VPCZones:?}
+	do
+		for p in Public Private
+		do
+			eval echo \${VPC${p}RouteTable${z}?}
+		done
+	done
+}
+
+# Extract the account suffix.  Also export the initial value as
+# var_account_suffix so scripts can inherit this value without including the
+# functions file.
+
+account_suffix() {
+	echo ${account_name#whispir-}
+}
+
+export var_account_suffix=$(account_suffix)
+
+# Return a list of used zone numbers.
+
+zone_numbers() {
+	zones=(${VPCZones:?})
+	seq 1 ${#zones[*]}
+}
+
+# Convert a zone number to a zone Suffix (upper case).
+
+zone_number_to_Suffix() {
+	zone_number=${1:?"Missing zone number"}
+	zones=(${VPCZones:?})
+	echo ${zones[$((${zone_number:?}-1))]}
+}
+
+# Convert a zone number to an availability zone name.
+
+zone_number_to_name() {
+	zone_number=${1:?"Missing zone number"}
+	zones=( $(aws ec2 describe-availability-zones --region ${region:?} --query 'AvailabilityZones[*].ZoneName' --output text) )
+	echo ${zones[$((${zone_number:?}-1))]}
+}
+
+# Refresh a file if it has changed.
+
+refresh_file() {
+	if cmp -s "${1:?}" "${2:?}"
+	then
+		rm -f "${1:?}"
+	else
+		echo Moving "${1:?}" to "${2:?}"
+		mv "${1:?}" "${2:?}"
+	fi
+}
+
+# Do the stack operation
+
+build_stack() {
+	echo Stack $stack_name Template "$JSON_FILE"
+	./create-or-update-stack $region $stack_name file://"$JSON_FILE" "$@"
+	refresh_file "$JSON_FILE" generated/${account:?}/stack-$stack_name
+}
+
+# Insert a configset called puppetrole.  All it does is create an external fact
+# setting puppetrole to the supplied value.  facter complains about .bak files
+# so always delete any .bak files in the external facts directory.
+
+puppetrole() {
+        role="${1:?"Missing puppetrole"}"
+        json_fragment << EODATA
+          "puppetrole" : {
+            "files" : {
+              "/etc/facter/facts.d/puppetrole" : {
+                "content" : "#!/bin/bash\necho puppetrole=$role",
+                "mode" : "0755"
+              }
+            },
+            "commands" : {
+              "000" : {
+                "command" : "rm -f /etc/facter/facts.d/*.bak"
+              }
+            }
+          },
+EODATA
+}
+
+# Insert a configset called puppetrepo.  It enables the epel repository which
+# is where puppet-server lives in RHEL7.
+
+puppetrepo() {
+	json_fragment << 'EODATA'
+
+	  # Need to enable the epel repo before we install any packages, so it
+	  # is in a separate configset.
+
+	  "puppetrepo" : {
+	    "commands" : {
+	      "100" : {
+	        "command" : "yum-config-manager --enable epel"
+	      }
+	    }
+	  },
+EODATA
+}
+
+# Insert a configset called puppetagent.
+#
+# Install /etc/puppet/puppet.conf.CF.  If /etc/puppet/puppet.conf does not
+# exist or does not contain option server then move /etc/puppet/puppet.conf.CF
+# to /etc/puppet/puppet.conf, otherwise leave /etc/puppet/puppet.conf alone.
+# CF does not define the 'server' option, puppet master defines that option so
+# this test stops CF from overwriting a file that puppet master is already
+# controlling.
+#
+# Start the puppet agent.  If parameter 1 is non-zero then this agent is
+# running on the puppetmaster and the puppetmaster configset is responsible for
+# installing /etc/puppet/puppet.conf.
+
+puppetagent() {
+	is_puppetmaster=${1:-0}
+
+        json_fragment << EODATA
+          "puppetagent" : {
+	    "packages" : {
+	      "yum" : {
+		"${package_puppet:?}" : []
+	      }
+	    },
+            "files" : {
+EODATA
+
+	if [[ $is_puppetmaster == 0 ]]
+	then
+		fixed_file /etc/puppet/puppet.conf.CF 000644
+	fi
+
+        json_fragment << 'EODATA'
+            },
+EODATA
+
+	if [[ $is_puppetmaster == 0 ]]
+	then
+		json_fragment << 'EODATA'
+	    "commands" : {
+
+	      # Puppet agents use uuid for the certname to avoid duplicate
+	      # certificates when a server is deleted and redefined.  Insert
+	      # the uuid from facter into /etc/puppet/puppet.conf.  certname
+	      # requires lower case values.
+
+	      "500" : {
+	        "command" : "cp -a /etc/puppet/puppet.conf.CF /etc/puppet/puppet.conf; uuid=$(facter uuid); sed -i -e s'/<%= @uuid[^>]*>/'${uuid,,}'/' /etc/puppet/puppet.conf",
+		"test" : "! grep -q '^\\s*server\\>' /etc/puppet/puppet.conf"
+	      }
+	    },
+EODATA
+
+	fi
+
+	json_fragment << 'EODATA'
+	    "services" : {
+	      "sysvinit" : {
+	        "puppet" : {
+		  "enabled" : "true",
+		  "ensureRunning" : "true"
+		}
+	      }
+	    }
+          },
+EODATA
+}

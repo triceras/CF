@@ -1,0 +1,474 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  "Description" : "Define the common security groups for a VPC",
+  "Parameters" : {
+    "OfficeExternal" : {
+      "Description" : "Office external IP range",
+      "Type" : "String",
+      "MinLength": "9",
+      "MaxLength": "18",
+      "Default" : "110.175.233.0/24",
+      "AllowedPattern" : "(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})/(\\d{1,2})",
+      "ConstraintDescription" : "must be a valid CIDR range of the form x.x.x.x/x."
+    },
+    "OfficeInternalPort1" : {
+      "Description" : "Office internal port1 IP range",
+      "Type" : "String",
+      "MinLength": "9",
+      "MaxLength": "18",
+      "Default" : "10.1.161.0/24",
+      "AllowedPattern" : "(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})/(\\d{1,2})",
+      "ConstraintDescription" : "must be a valid CIDR range of the form x.x.x.x/x."
+    },
+    "OfficeInternalPort2" : {
+      "Description" : "Office internal port2 IP range",
+      "Type" : "String",
+      "MinLength": "9",
+      "MaxLength": "18",
+      "Default" : "10.1.162.0/24",
+      "AllowedPattern" : "(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})/(\\d{1,2})",
+      "ConstraintDescription" : "must be a valid CIDR range of the form x.x.x.x/x."
+    },
+    "OfficeInternalPort4" : {
+      "Description" : "Office internal port4 IP range",
+      "Type" : "String",
+      "MinLength": "9",
+      "MaxLength": "18",
+      "Default" : "10.1.164.0/24",
+      "AllowedPattern" : "(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})/(\\d{1,2})",
+      "ConstraintDescription" : "must be a valid CIDR range of the form x.x.x.x/x."
+    }
+  },
+  "Resources" : {
+    "SSHVPC" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "SSH from hosts in VPC: TESTING ONLY",
+        "VpcId" : "vpc-1310b376",
+        "Tags" : [
+          { "Key" : "Name", "Value" : "SSHVPC" }
+        ]
+      }
+    },
+    "ipingresstcpSSHVPC220A2100001022" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "22",
+        "ToPort" : "22",
+        "CidrIp" : "10.33.0.0/16",
+        "GroupId" : { "Fn::GetAtt": [ "SSHVPC", "GroupId" ] }
+      }
+    },
+    "ICMPExternal" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "ICMP from external hosts",
+        "VpcId" : "vpc-1310b376",
+        "Tags" : [
+          { "Key" : "Name", "Value" : "ICMPExternal" }
+        ]
+      }
+    },
+    "ipingressicmpICMPExternalall0000000000all" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "icmp",
+        "FromPort" : "-1",
+        "ToPort" : "-1",
+        "CidrIp" : "0.0.0.0/0",
+        "GroupId" : { "Fn::GetAtt": [ "ICMPExternal", "GroupId" ] }
+      }
+    },
+    "mail" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "Mail servers security group",
+        "VpcId" : "vpc-1310b376",
+        "Tags" : [
+          { "Key" : "Name", "Value" : "mail" }
+        ]
+      }
+    },
+    "ipingresstcpmail25000000000025" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "25",
+        "ToPort" : "25",
+        "CidrIp" : "0.0.0.0/0",
+        "GroupId" : { "Fn::GetAtt": [ "mail", "GroupId" ] }
+      }
+    },
+    "AllTCP" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "TCP from anywhere: TESTING ONLY",
+        "VpcId" : "vpc-1310b376",
+        "Tags" : [
+          { "Key" : "Name", "Value" : "AllTCP" }
+        ]
+      }
+    },
+    "ipingresstcpAllTCP000000000000" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "0",
+        "ToPort" : "65535",
+        "CidrIp" : "0.0.0.0/0",
+        "GroupId" : { "Fn::GetAtt": [ "AllTCP", "GroupId" ] }
+      }
+    },
+    "AllUDP" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "UDP from anywhere: TESTING ONLY",
+        "VpcId" : "vpc-1310b376",
+        "Tags" : [
+          { "Key" : "Name", "Value" : "AllUDP" }
+        ]
+      }
+    },
+    "ipingressudpAllUDP000000000000" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "udp",
+        "FromPort" : "0",
+        "ToPort" : "65535",
+        "CidrIp" : "0.0.0.0/0",
+        "GroupId" : { "Fn::GetAtt": [ "AllUDP", "GroupId" ] }
+      }
+    },
+    "AllICMP" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "ICMP from anywhere: TESTING ONLY",
+        "VpcId" : "vpc-1310b376",
+        "Tags" : [
+          { "Key" : "Name", "Value" : "AllICMP" }
+        ]
+      }
+    },
+    "ipingressicmpAllICMPall0000000000all" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "icmp",
+        "FromPort" : "-1",
+        "ToPort" : "-1",
+        "CidrIp" : "0.0.0.0/0",
+        "GroupId" : { "Fn::GetAtt": [ "AllICMP", "GroupId" ] }
+      }
+    },
+    "AllTraffic" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "All traffic from anywhere: TESTING ONLY",
+        "VpcId" : "vpc-1310b376",
+        "Tags" : [
+          { "Key" : "Name", "Value" : "AllTraffic" }
+        ]
+      }
+    },
+    "ipingressallAllTraffic0000000000" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "-1",
+        "FromPort" : "",
+        "ToPort" : "",
+        "CidrIp" : "0.0.0.0/0",
+        "GroupId" : { "Fn::GetAtt": [ "AllTraffic", "GroupId" ] }
+      }
+    },
+    "PuppetMasterServer" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "Puppetmaster server",
+        "VpcId" : "vpc-1310b376",
+        "Tags" : [
+          { "Key" : "Name", "Value" : "PuppetMasterServer" }
+        ]
+      }
+    },
+    "ZabbixServer" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "Local Zabbix server",
+        "VpcId" : "vpc-1310b376",
+        "Tags" : [
+          { "Key" : "Name", "Value" : "ZabbixServer" }
+        ]
+      }
+    },
+    "ipingresstcpZabbixServer100500A2100001010050" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "10050",
+        "ToPort" : "10050",
+        "CidrIp" : "10.33.0.0/16",
+        "GroupId" : { "Fn::GetAtt": [ "ZabbixServer", "GroupId" ] }
+      }
+    },
+    "ipingresstcpZabbixServer100510A2100001010051" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "10051",
+        "ToPort" : "10051",
+        "CidrIp" : "10.33.0.0/16",
+        "GroupId" : { "Fn::GetAtt": [ "ZabbixServer", "GroupId" ] }
+      }
+    },
+    "WebserverOffice" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "HTTP and HTTPS from office",
+        "VpcId" : "vpc-1310b376",
+        "Tags" : [
+          { "Key" : "Name", "Value" : "WebserverOffice" }
+        ]
+      }
+    },
+    "ipingresstcpWebserverOffice443OfficeInternalPort1443" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "443",
+        "ToPort" : "443",
+        "CidrIp" : { "Ref" : "OfficeInternalPort1" },
+        "GroupId" : { "Fn::GetAtt": [ "WebserverOffice", "GroupId" ] }
+      }
+    },
+    "ipingresstcpWebserverOffice443OfficeInternalPort2443" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "443",
+        "ToPort" : "443",
+        "CidrIp" : { "Ref" : "OfficeInternalPort2" },
+        "GroupId" : { "Fn::GetAtt": [ "WebserverOffice", "GroupId" ] }
+      }
+    },
+    "ipingresstcpWebserverOffice443OfficeInternalPort4443" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "443",
+        "ToPort" : "443",
+        "CidrIp" : { "Ref" : "OfficeInternalPort4" },
+        "GroupId" : { "Fn::GetAtt": [ "WebserverOffice", "GroupId" ] }
+      }
+    },
+    "HTTPSExternal" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "HTTPS from external hosts",
+        "VpcId" : "vpc-1310b376",
+        "Tags" : [
+          { "Key" : "Name", "Value" : "HTTPSExternal" }
+        ]
+      }
+    },
+    "ipingresstcpHTTPSExternal4430000000000443" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "443",
+        "ToPort" : "443",
+        "CidrIp" : "0.0.0.0/0",
+        "GroupId" : { "Fn::GetAtt": [ "HTTPSExternal", "GroupId" ] }
+      }
+    },
+    "CommonInternal" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "Common access from internal hosts to all AWS hosts",
+        "VpcId" : "vpc-1310b376",
+        "Tags" : [
+          { "Key" : "Name", "Value" : "CommonInternal" }
+        ]
+      }
+    },
+    "sgingresstcpCommonInternal10050ZabbixServer10050" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "10050",
+        "ToPort" : "10050",
+        "SourceSecurityGroupId" : { "Fn::GetAtt": [ "ZabbixServer", "GroupId" ] },
+        "GroupId" : { "Fn::GetAtt": [ "CommonInternal", "GroupId" ] }
+      }
+    },
+    "ipingresstcpCommonInternal10050OfficeInternalPort110050" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "10050",
+        "ToPort" : "10050",
+        "CidrIp" : { "Ref" : "OfficeInternalPort1" },
+        "GroupId" : { "Fn::GetAtt": [ "CommonInternal", "GroupId" ] }
+      }
+    },
+    "ipingresstcpCommonInternal10050OfficeInternalPort210050" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "10050",
+        "ToPort" : "10050",
+        "CidrIp" : { "Ref" : "OfficeInternalPort2" },
+        "GroupId" : { "Fn::GetAtt": [ "CommonInternal", "GroupId" ] }
+      }
+    },
+    "ipingresstcpCommonInternal10050OfficeInternalPort410050" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "10050",
+        "ToPort" : "10050",
+        "CidrIp" : { "Ref" : "OfficeInternalPort4" },
+        "GroupId" : { "Fn::GetAtt": [ "CommonInternal", "GroupId" ] }
+      }
+    },
+    "sgingresstcpCommonInternal10051ZabbixServer10051" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "10051",
+        "ToPort" : "10051",
+        "SourceSecurityGroupId" : { "Fn::GetAtt": [ "ZabbixServer", "GroupId" ] },
+        "GroupId" : { "Fn::GetAtt": [ "CommonInternal", "GroupId" ] }
+      }
+    },
+    "ipingresstcpCommonInternal10051OfficeInternalPort110051" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "10051",
+        "ToPort" : "10051",
+        "CidrIp" : { "Ref" : "OfficeInternalPort1" },
+        "GroupId" : { "Fn::GetAtt": [ "CommonInternal", "GroupId" ] }
+      }
+    },
+    "ipingresstcpCommonInternal10051OfficeInternalPort210051" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "10051",
+        "ToPort" : "10051",
+        "CidrIp" : { "Ref" : "OfficeInternalPort2" },
+        "GroupId" : { "Fn::GetAtt": [ "CommonInternal", "GroupId" ] }
+      }
+    },
+    "ipingresstcpCommonInternal10051OfficeInternalPort410051" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "10051",
+        "ToPort" : "10051",
+        "CidrIp" : { "Ref" : "OfficeInternalPort4" },
+        "GroupId" : { "Fn::GetAtt": [ "CommonInternal", "GroupId" ] }
+      }
+    },
+    "ipingresstcpCommonInternal22OfficeExternal22" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "22",
+        "ToPort" : "22",
+        "CidrIp" : { "Ref" : "OfficeExternal" },
+        "GroupId" : { "Fn::GetAtt": [ "CommonInternal", "GroupId" ] }
+      }
+    },
+    "ipingresstcpCommonInternal22OfficeInternalPort122" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "22",
+        "ToPort" : "22",
+        "CidrIp" : { "Ref" : "OfficeInternalPort1" },
+        "GroupId" : { "Fn::GetAtt": [ "CommonInternal", "GroupId" ] }
+      }
+    },
+    "ipingresstcpCommonInternal22OfficeInternalPort222" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "22",
+        "ToPort" : "22",
+        "CidrIp" : { "Ref" : "OfficeInternalPort2" },
+        "GroupId" : { "Fn::GetAtt": [ "CommonInternal", "GroupId" ] }
+      }
+    },
+    "ipingresstcpCommonInternal22OfficeInternalPort422" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "22",
+        "ToPort" : "22",
+        "CidrIp" : { "Ref" : "OfficeInternalPort4" },
+        "GroupId" : { "Fn::GetAtt": [ "CommonInternal", "GroupId" ] }
+      }
+    },
+    "ipingressicmpCommonInternalall0A00000008all" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "icmp",
+        "FromPort" : "-1",
+        "ToPort" : "-1",
+        "CidrIp" : "10.0.0.0/8",
+        "GroupId" : { "Fn::GetAtt": [ "CommonInternal", "GroupId" ] }
+      }
+    }
+  },
+  "Outputs" : {
+    "SECAllUDP" : {
+      "Description" : "UDP from anywhere: TESTING ONLY",
+      "Value" : { "Ref" : "AllUDP" }
+    },
+    "SECZabbixServer" : {
+      "Description" : "Local Zabbix server",
+      "Value" : { "Ref" : "ZabbixServer" }
+    },
+    "SECmail" : {
+      "Description" : "Mail servers security group",
+      "Value" : { "Ref" : "mail" }
+    },
+    "SECAllTraffic" : {
+      "Description" : "All traffic from anywhere: TESTING ONLY",
+      "Value" : { "Ref" : "AllTraffic" }
+    },
+    "SECHTTPSExternal" : {
+      "Description" : "HTTPS from external hosts",
+      "Value" : { "Ref" : "HTTPSExternal" }
+    },
+    "SECAllTCP" : {
+      "Description" : "TCP from anywhere: TESTING ONLY",
+      "Value" : { "Ref" : "AllTCP" }
+    },
+    "SECWebserverOffice" : {
+      "Description" : "HTTP and HTTPS from office",
+      "Value" : { "Ref" : "WebserverOffice" }
+    },
+    "SECCommonInternal" : {
+      "Description" : "Common access from internal hosts to all AWS hosts",
+      "Value" : { "Ref" : "CommonInternal" }
+    },
+    "SECPuppetMasterServer" : {
+      "Description" : "Puppetmaster server",
+      "Value" : { "Ref" : "PuppetMasterServer" }
+    },
+    "SECICMPExternal" : {
+      "Description" : "ICMP from external hosts",
+      "Value" : { "Ref" : "ICMPExternal" }
+    },
+    "SECSSHVPC" : {
+      "Description" : "SSH from hosts in VPC: TESTING ONLY",
+      "Value" : { "Ref" : "SSHVPC" }
+    },
+    "SECAllICMP" : {
+      "Description" : "ICMP from anywhere: TESTING ONLY",
+      "Value" : { "Ref" : "AllICMP" }
+    }
+  }
+}

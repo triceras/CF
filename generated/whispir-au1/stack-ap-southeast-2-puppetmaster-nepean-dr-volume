@@ -1,0 +1,22 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  "Description" : "Define a persistent volume",
+  "Resources" : {
+    "volume" : {
+      "Type" : "AWS::EC2::Volume",
+      "Properties" : {
+        "AvailabilityZone" : "ap-southeast-2a",
+        "Size" : "6",
+        "Tags" : [
+          { "Key" : "Name", "Value" : "puppet-nepean-dr-persistent" }
+        ]
+      }
+    }
+  },
+  "Outputs" : {
+    "VolumeId" : {
+      "Description" : "Volume id",
+      "Value" : { "Ref" : "volume" }
+    }
+  }
+}

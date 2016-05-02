@@ -1,0 +1,28 @@
+#!/bin/bash
+
+# facter up to at least 2.1.el7sat does not handle multiple IPs on the same
+# interface unless they are visible in ifconfig.  The multiple IPs assigned to
+# eth1, eth2 etc. on a VPN server show up in 'ip addr' but not in ifconfig.  So
+# install a custom fact to get data from /etc/sysconfig/network-scripts/ETHData
+# into Puppet.
+
+set -e
+
+source /etc/sysconfig/network-scripts/ETHData
+
+echo eth_interfaces=\"${eth_interfaces[*]}\"
+for eth in ${eth_interfaces[*]}
+do
+	eval eth_ips=(\${${eth}_ips[*]})
+	for i in $(seq 0 $(( ${#eth_ips[*]} - 1 )) )
+	do
+		ip=${eth_ips[$(($i))]}
+		echo "${eth}_ip${i:?}=${ip:?}"
+	done
+
+	# Puppet defines explicit routes to each remote VPN IP via the eth
+	# gateways.  Give Puppet facts that define the eth prefix and gateway.
+
+	eval echo "${eth}_prefix=\${${eth}_prefix:?}"
+	eval echo "${eth}_gw=\${${eth}_gw:?}"
+done

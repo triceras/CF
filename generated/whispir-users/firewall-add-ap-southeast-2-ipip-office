@@ -1,0 +1,18 @@
+# Account: whispir-users
+# Region: ap-southeast-2
+# Firewall type: Fortigate
+# VPC stack: ap-southeast-2-vpc
+# Network base: 35
+
+config router static
+    edit 3510
+        set device "aws-au1-ipip-1"
+        set dst 10.35.0.0 255.255.0.0
+        set priority 0
+end
+config router static
+    edit 3520
+        set device "aws-au1-ipip-2"
+        set dst 10.35.0.0 255.255.0.0
+        set priority 0
+end

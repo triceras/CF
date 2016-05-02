@@ -1,0 +1,9 @@
+#!/bin/bash
+
+# Create network for whispir-users
+
+set -e
+
+export account=whispir-users
+source ./network-variables
+./network.common

@@ -1,0 +1,139 @@
+#!/bin/bash
+
+# Common definitions for util servers.
+#
+# Parameters are:
+#   Region.
+#   VPC stack name.
+#   Common security stack name.
+
+set -e
+set -o pipefail
+
+region=${1:?"Missing region name"}
+vpc_stack_name=${2:?"Missing VPC stack name"}
+common_security_stack_name=${3:?"Missing common security stack name"}
+shift 3
+
+source ./functions
+
+# util instances are responsible for all DNS work in their account/region.  So
+# give them the authority to query all EC2 instances.  If this is a central
+# util instance then they need full Route53 authority as well.
+
+echo "Create util EC2 roles"
+puppetrole=util
+if [ "${account:?}" == "${CENTRAL_ACCOUNT:?}" ]
+then
+	puppetrole=util_central
+	extra_policies="arn:aws:iam::283928602837:policy/allow-assume-ec2-route53-full-role"
+fi
+policies=$(cat << EODATA
+arn:aws:iam::aws:policy/AmazonEC2ReadOnlyAccess
+arn:aws:iam::aws:policy/AmazonElastiCacheReadOnlyAccess
+arn:aws:iam::aws:policy/AmazonRDSReadOnlyAccess
+$extra_policies
+EODATA
+)
+./create-ec2-role $region ec2-util util "$(echo ${policies:?})"
+
+# Get outputs from the stacks that this script or its children depend on.
+
+get_vpc_data ${vpc_stack_name:?}
+eval $(stack_outputs $common_security_stack_name)
+eval $(stack_outputs ec2-util)
+
+json_fragment << 'EODATA'
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "Define the common util data in a VPC",
+
+  "Resources" : {
+EODATA
+
+sg UtilSecurityGroup "Util Security Group"
+ipingress UtilSecurityGroup 53 10.0.0.0/8 53 tcp	# RFC1918 hosts need DNS
+ipingress UtilSecurityGroup 53 10.0.0.0/8 53 udp	# RFC1918 hosts need DNS
+ipingress UtilSecurityGroup 53 172.16.0.0/12 53 tcp	# RFC1918 hosts need DNS
+ipingress UtilSecurityGroup 53 172.16.0.0/12 53 udp	# RFC1918 hosts need DNS
+ipingress UtilSecurityGroup 53 192.168.0.0/16 53 tcp	# RFC1918 hosts need DNS
+ipingress UtilSecurityGroup 53 192.168.0.0/16 53 udp	# RFC1918 hosts need DNS
+ipingress UtilSecurityGroup 42 $vpc_hosts		# VPC hosts send a signal to port 42 at boot
+
+# Puppetmaster needs to ssh to our Git repositories which may go via IPIP so
+# allow ssh from the puppet master as input to the util servers.
+
+sgingress UtilSecurityGroup 22 ${SECPuppetMasterServer:?}
+
+# Traffic from internal but non-AWS networks (office, King St etc.) to a host
+# in a spoke comes in through IPIP on the util box and goes back out through a
+# util box.  That means the util box sees traffic from some server port (e.g.
+# ssh) to an ephemeral port.  Just allow this through.
+#
+# To make things worse, if one of the VPNs to the hub is down then we get
+# asymmetrical routing through the hub.  Traffic that leaves a spoke over IPIP
+# via one spoke util server can come back through the other util server in that
+# spoke.  So allow ephemeral ports between util servers in a spoke account.
+#
+# Ditto port 25.  If an account has no local mail server, it falls back to
+# using the office mail servers.  On a spoke account, that traffic goes via the
+# local util boxes.
+#
+# Ditto port 53.  Requests from one util server to DNS in the colo sites can
+# come back via the other util server and they come back as UDP with ephemeral
+# source ports.
+#
+# FIXME: Remove this when we get rid of IPIP traffic.
+
+if [ -n "$hub_name" ]
+then
+	ipingress UtilSecurityGroup ${linux_ephemeral_from} $vpc_hosts ${linux_ephemeral_to}
+	sgingress UtilSecurityGroup ${linux_ephemeral_from} UtilSecurityGroup ${linux_ephemeral_to} tcp
+	ipingress UtilSecurityGroup 22 $vpc_hosts
+	ipingress UtilSecurityGroup 25 $vpc_hosts
+	sgingress UtilSecurityGroup ${linux_ephemeral_from} UtilSecurityGroup ${linux_ephemeral_to} udp
+fi
+
+# AWS documents IP in IP as protocol 94, but Fortigate and Linux use protocol 4
+# for IP-IP.  Any private address (including firewalls) can run an IP-IP tunnel
+# to any util box.
+
+ipingress UtilSecurityGroup '' 10.0.0.0/8 '' 4
+
+# HACK HACK HACK.  The King St Fortigate on old firmware does not
+# support IPIP (protocol 4) but it does support GRE (protocol 47).
+
+# FIXME: Remove this hack when the King St Fortigate is running on decent
+# firmware.
+
+ipingress UtilSecurityGroup '' 10.0.0.0/8 '' 47
+
+json_fragment << 'EODATA'
+  },
+
+  "Outputs" : {
+EODATA
+
+sg_outputs ''
+
+json_fragment << 'EODATA'
+  }
+}
+EODATA
+
+build_stack
+
+# Now create a separate stack for each util instance in the first two zones.
+
+base=0
+for zone_number in $(zone_numbers)
+do
+	if [[ ${zone_number:?} -gt 2 ]]
+	then
+		break
+	fi
+	./create-util-instance $region $stack_name $zone_number $base $puppetrole
+	# Step to the next availability zone
+	base=$(($base+64))
+done

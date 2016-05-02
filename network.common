@@ -1,0 +1,154 @@
+#!/bin/bash
+
+# Common code to create a network.  The environment must contain
+# account, region, network_base, availability_zones, install_applications,
+# hub_name (if this is a spoke).
+
+set -e
+set -o pipefail
+
+declare -A office_interface
+office_interface[wan1]=203.191.201.76
+
+# Not 10.1.166.0/24 - Guest wifi
+# Not 10.1.168.0/24 - Office wifi.  ISO certification says NO!
+# Fortigate office uses port1, port2, port4 for Ethernet.
+office_routes='10.1.161.0/24 10.1.162.0/24 10.1.163.0/24'
+office_ipip_outside_address=10.1.162.1
+
+king_st_cgw=116.240.201.165
+king_st_routes=10.50.50.0/23
+king_st_ipip_outside_address=10.50.50.1
+
+nepean_cgw=203.45.17.178
+nepean_routes=10.60.60.0/24
+nepean_ipip_outside_address=10.60.60.1
+
+# First do all the work for the specified account.
+
+(
+	set -e
+	set -o pipefail
+	source ./sts-assume-admin $account
+
+	echo "create-vpc $region $network_base $availability_zones"
+	./create-vpc $region $network_base $availability_zones
+	eval $(stack_outputs $region-vpc)
+
+	echo "Common security groups"
+	./create-common-security $region $region-vpc
+
+	if [ ${install_applications:?} -eq 1 ]
+	then
+		echo "Application security groups"
+		./create-application-security $region $region-vpc $region-common-security
+	fi
+)
+
+if [ -n "$hub_name" ]
+then
+	# vpc-peer does its own account switching so it must be run without an
+	# assumed role.
+
+	echo "Peering to $hub_name"
+	./vpc-peer $region $hub_name $region-vpc $account $region-vpc
+fi
+
+(
+	set -e
+	set -o pipefail
+	source ./sts-assume-admin $account
+	get_vpc_data $region-vpc
+
+	if [ -n "$hub_name" ]
+	then
+		echo 'IPIP office'
+		./ipip-generate-firewall Fortigate $account $region $region-ipip-office $region-vpc $hub_name
+
+		echo 'IPIP King St'
+		./ipip-generate-firewall Fortigate $account $region $region-ipip-king-st $region-vpc $hub_name
+
+		echo 'IPIP nepean'
+		./ipip-generate-firewall Juniper $account $region $region-ipip-nepean $region-vpc $hub_name
+	else
+		echo 'VPN office wan1'
+		./create-vpn $region $region-vpn-office $region-vpc 'office' ${office_interface[wan1]} $office_routes
+		./vpn-generate-firewall Fortigate wan1 $account $region $region-vpn-office $region-vpc $office_ipip_outside_address 'port1 port2 port4' 0
+
+		echo 'VPN King St'
+		./create-vpn $region $region-vpn-king-st $region-vpc 'King St' $king_st_cgw $king_st_routes
+		./vpn-generate-firewall Fortigate wan1 $account $region $region-vpn-king-st $region-vpc $king_st_ipip_outside_address 'port1' 1
+
+		echo 'VPN nepean'
+		./create-vpn $region $region-vpn-nepean $region-vpc 'Nepean DR' $nepean_cgw $nepean_routes
+		./vpn-generate-firewall Juniper reth0.0 $account $region $region-vpn-nepean $region-vpc $nepean_ipip_outside_address
+	fi
+
+	echo "NAT gateways"
+	for zone_number in $(zone_numbers)
+	do
+		# Create NAT gateway and elastic IP.
+		./create-elastic-ip ${region:?} natgateway${zone_number:?} " for NAT gateway - DO NOT DELETE!"
+		./create-nat-gateway ${region:?} ${region:?}-vpc ${region:?}-elastic-ip-natgateway${zone_number:?} ${zone_number:?}
+	done
+
+	# Generate the routing data for this VPC.
+
+	echo Generating routing for $region-vpc
+	./generate-routing $region $region-vpc "$hub_name"
+
+	echo "Util servers"
+	./create-util $region $region-vpc $region-common-security
+
+	echo "Puppet master"
+	./create-puppetmaster $region $region-puppetmaster $region-vpc $region-common-security 1 puppet PuppetMasterIngress $vpc_hosts
+
+	# FIXME: Building the monitoring server is disabled until the ops team
+	# can get up to speed on CF/Puppet and start building their own
+	# servers.  The CF part of the monitoring server is probably correct,
+	# but the Puppet configuration of the monitoring server is incomplete.
+
+	# echo "Monitoring"
+	# ./create-monitoring-server $region $region-monitoring $region-vpc $region-common-security 2
+	echo "No monitoring server at the moment"	# FIXME: delete this and uncomment the lines above
+
+	if [[ ${external_vpn_ips:?} -gt 0 ]]
+	then
+		echo "External VPN servers"
+		./create-vpn-server-common $region $region-vpc
+
+		# Our VPN servers run master/slave with a vpn server in the
+		# first two zones.
+
+		for zone_number in $(zone_numbers)
+		do
+			if [[ ${zone_number:?} -gt 2 ]]
+			then
+				break
+			fi
+			./create-vpn-server-instance $region $region-vpc $region-common-security $region-vpn-server-common ec2-vpn-server ${zone_number:?}
+		done
+	fi
+
+	echo 'Marking default objects as Do not use!'
+	./do-not-use $region $region-vpc
+)
+
+# If this account is attached to a hub then the hub configuration may have been
+# changed by adding this account.  Refresh the hub account NAT instances.
+
+if [ -n "$hub_name" ]
+then
+	(
+		set -e
+		set -o pipefail
+		export account=$hub_name
+		unset hub_name
+		# These variables must come from the hub VPC, not from my environment
+		unset network_base
+		unset availability_zones
+		echo -e "\nRefreshing util instances for hub $account\n"
+		source ./sts-assume-admin $account
+		./create-util $region $region-vpc $region-common-security
+	)
+fi

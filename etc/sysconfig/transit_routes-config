@@ -1,0 +1,6 @@
+# The ip route table number to use for transit routes.
+TRANSIT_ROUTES_TABLE=200
+# Firewall marks to treat as transit.
+TRANSIT_ROUTES_MARKS='0x44/0xcc 0x05/0x0d'
+# Known ipip tunnels.
+TRANSIT_ROUTES_TUNNELS='${TRANSIT_ROUTES_TUNNELS}'

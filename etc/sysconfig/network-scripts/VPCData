@@ -1,0 +1,7 @@
+VPCZones="${VPCZones}"
+VPCRegion=${VPCRegion}
+VPCNetworkBase=${VPCNetworkBase}
+VPCAccountName=${VPCAccountName}
+VPCNameServer1=${VPCNameServer1}
+VPCNameServer2=${VPCNameServer2}
+VPCDomain=${VPCDomain}

@@ -1,0 +1,137 @@
+#!/bin/bash
+
+# Given an AMI name that has been copied to multiple regions, give all our
+# accounts permission to launch from that AMI in all the regions.
+#
+# The calling environment must contain the required credentials for the account
+# that owns the AMI.
+#
+# Parameters are:
+#   AMI name.
+
+set -e
+set -o pipefail
+
+image_name=${1:?"Missing AMI name"}
+shift 1
+
+owner=$(./map-account-number ${account:?})
+
+# The AMI copy has been done (or at least started) to each region that we use.
+# Now give permission to all our accounts to use that AMI.  We have to wait
+# until the AMI is available otherwise AWS spits the dummy.
+#
+# This is a nested loop.  The outer loop is over all regions to get the AMI in
+# each region.  The inner loop is over all accounts that run instances to give
+# them permission to launch the AMI in that region.
+#
+# This is actually more permission than is required, but it is better to give
+# all accounts permission to launch all AMIs, that gives us consistent
+# permisson lists.  The alternative is to only give permission to accounts that
+# use the region that the AMI is in.  That option leaves people puzzled about
+# why each AMI has different permission lists.
+
+declare -A ami_permitted
+tmp_file=$(mktemp)
+awk -F'|' '/^\|\|/{next} $7 !~ /^ *$/{print $2 " " $3 " "$7}' < accounts > ${tmp_file:?}
+# The legacy whispir account might want to use these AMIs so give it
+# permission.  That needs a kludge to pretend that the legacy account is in CF.
+echo 997185285782 whispir ap-southeast-2 >> ${tmp_file:?}
+
+while read dummy1 dummy2 target_region
+do
+	if [[ -n "${ami_permitted[${target_region:?}]}" ]]
+	then
+		continue
+	fi
+
+	# AWS "feature".  The AMI name is not available when an AMI copy has
+	# only just been started, it can take a few minutes before the name
+	# becomes available.  Filtering by AMI name returns an empty string
+	# until part way into the AMI copy process.
+	#
+	# To work around this feature, if the target image id is empty then
+	# check if there are any pending AMIs.  If there are, wait a bit and
+	# try again.  Only report a problem if there are no pending AMIs and
+	# the AMI name does not exist in the target region.
+
+	while true
+	do
+
+		target_image_id=$(
+			aws ec2 describe-images \
+				--region ${target_region:?} \
+				--owner ${owner:?} \
+				--filter Name=name,Values=${image_name:?} \
+				--query 'Images[*].[ImageId]' \
+				--output text
+		)
+		if [[ -z "${target_image_id}" ]]
+		then
+			pending=$(
+				aws ec2 describe-images \
+					--region ${target_region:?} \
+					--owner ${owner:?} \
+					--filter Name=state,Values=pending \
+					--query 'Images[*].[ImageId]' \
+					--output text
+			)
+			if [[ -n "${pending}" ]]
+			then
+				echo Region ${target_region:?} has no AMI with name ${image_name:?}
+				echo It has pending AMIs, waiting a bit to see if the name becomes visible
+				sleep 30
+				continue
+			fi
+			echo Cannot get target_image_id for ${image_name:?} with owner ${owner:?} in region ${target_region:?}
+			exit 1
+		fi
+
+		giveup=$(date '+%s' -d '+30 minutes')
+		prev_state=''
+		while true
+		do
+			state=$(
+				aws ec2 describe-images \
+					--region ${target_region:?} \
+					--image-ids ${target_image_id:?} \
+					--query 'Images[*].State' \
+					--output text
+			)
+			if [[ "${state:?}" == available ]]
+			then
+				echo -e "\n${image_name:?} ${target_image_id:?} is available in ${target_region:?}"
+				break
+			fi
+			if [ $(date '+%s') -gt ${giveup:?} ]
+			then
+				echo -e "\nError: ${image_name:?} ${target_image_id:?} is not available in ${target_region:?} after 30 minutes"
+				exit 1
+			fi
+			if [[ "${prev_state}" != ${state:?} ]]
+			then
+				echo -en "\n${image_name:?} ${target_image_id:?} is ${state:?} in ${target_region:?} "
+				prev_state=${state:?}
+			else
+				echo -n .
+			fi
+			sleep 5
+		done
+
+		while read target_number target_account dummy3
+		do
+			aws ec2 modify-image-attribute \
+				--region ${target_region:?} \
+				--image-id ${target_image_id:?} \
+				--launch-permission '{ "Add": [{ "UserId": "'${target_number:?}'" }]}'
+
+			echo "${image_name:?} ${target_image_id:?} permitted to ${target_account:?} in ${target_region:?}"
+		done < ${tmp_file:?}
+
+		ami_permitted[${target_region:?}]=1
+
+		break
+	done
+
+done < ${tmp_file:?}
+rm -f ${tmp_file:?}

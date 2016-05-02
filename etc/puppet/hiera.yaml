@@ -1,0 +1,19 @@
+---
+:backends:
+  - yaml
+
+:logger: puppet
+
+:hierarchy:
+  - "%{puppetrole}"
+  - "%{fqdn}"
+  - "%{domain}"
+  - "%{calling_module}"
+  - "%{name}"
+  - "%{operatingsystem}-%{operatingsystemmajrelease}"
+  - "common"
+
+:yaml:
+  :datadir: "/var/puppet/environments/%{environment}/hiera/"
+
+:merge_behavior: deeper

@@ -1,0 +1,171 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  "Description" : "Define common VPN server resources",
+  "Resources" : {
+    "SECVPNServerInternal" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "VPN Server Security Group - internal traffic",
+        "VpcId" : "vpc-1310b376",
+        "Tags" : [
+          { "Key" : "Name", "Value" : "SECVPNServerInternal" }
+        ]
+      }
+    },
+    "ipingresstcpSECVPNServerInternal00A210000100" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "0",
+        "ToPort" : "65535",
+        "CidrIp" : "10.33.0.0/16",
+        "GroupId" : { "Fn::GetAtt": [ "SECVPNServerInternal", "GroupId" ] }
+      }
+    },
+    "ipingressudpSECVPNServerInternal00A210000100" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "udp",
+        "FromPort" : "0",
+        "ToPort" : "65535",
+        "CidrIp" : "10.33.0.0/16",
+        "GroupId" : { "Fn::GetAtt": [ "SECVPNServerInternal", "GroupId" ] }
+      }
+    },
+    "ipingressicmpSECVPNServerInternalall0A21000010all" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "icmp",
+        "FromPort" : "-1",
+        "ToPort" : "-1",
+        "CidrIp" : "10.33.0.0/16",
+        "GroupId" : { "Fn::GetAtt": [ "SECVPNServerInternal", "GroupId" ] }
+      }
+    },
+    "sgingress112SECVPNServerInternalSECVPNServerInternal" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "112",
+        "FromPort" : "",
+        "ToPort" : "",
+        "SourceSecurityGroupId" : { "Fn::GetAtt": [ "SECVPNServerInternal", "GroupId" ] },
+        "GroupId" : { "Fn::GetAtt": [ "SECVPNServerInternal", "GroupId" ] }
+      }
+    },
+    "SECVPNServerExternal" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "VPN Server Security Group - external traffic",
+        "VpcId" : "vpc-1310b376",
+        "Tags" : [
+          { "Key" : "Name", "Value" : "SECVPNServerExternal" }
+        ]
+      }
+    },
+    "ipingressUDPSECVPNServerExternal5000000000000500" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "UDP",
+        "FromPort" : "500",
+        "ToPort" : "500",
+        "CidrIp" : "0.0.0.0/0",
+        "GroupId" : { "Fn::GetAtt": [ "SECVPNServerExternal", "GroupId" ] }
+      }
+    },
+    "ipingressUDPSECVPNServerExternal450000000000004500" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "UDP",
+        "FromPort" : "4500",
+        "ToPort" : "4500",
+        "CidrIp" : "0.0.0.0/0",
+        "GroupId" : { "Fn::GetAtt": [ "SECVPNServerExternal", "GroupId" ] }
+      }
+    },
+    "ipingress50SECVPNServerExternal0000000000" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "50",
+        "FromPort" : "",
+        "ToPort" : "",
+        "CidrIp" : "0.0.0.0/0",
+        "GroupId" : { "Fn::GetAtt": [ "SECVPNServerExternal", "GroupId" ] }
+      }
+    },
+    "ipingress51SECVPNServerExternal0000000000" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "51",
+        "FromPort" : "",
+        "ToPort" : "",
+        "CidrIp" : "0.0.0.0/0",
+        "GroupId" : { "Fn::GetAtt": [ "SECVPNServerExternal", "GroupId" ] }
+      }
+    },
+    "policy" : {
+      "Type": "AWS::IAM::ManagedPolicy",
+      "Properties": {
+        "Description" : "VPN server policy",
+        "PolicyDocument" : {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": "ec2:DescribeInstances",
+              "Resource": "*"
+            },
+            {
+              "Effect": "Allow",
+              "Action": "ec2:DescribeAddresses",
+              "Resource": "*"
+            },
+            {
+              "Effect": "Allow",
+              "Action": "ec2:DescribeNetworkInterfaces",
+              "Resource": "*"
+            },
+            {
+              "Effect": "Allow",
+              "Action": "ec2:DescribeRouteTables",
+              "Resource": "*"
+            },
+            {
+              "Effect": "Allow",
+              "Action": "ec2:CreateRoute",
+              "Resource": "*"
+            },
+            {
+              "Effect": "Allow",
+              "Action": "ec2:DeleteRoute",
+              "Resource": "*"
+            },
+            {
+              "Effect": "Allow",
+              "Action": "ec2:AssociateAddress",
+              "Resource": "*"
+            },
+            {
+              "Effect": "Allow",
+              "Action": "ec2:DisassociateAddress",
+              "Resource": "*"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "Outputs" : {
+    "VPNServerPolicy" : {
+      "Description" : "VPN Server policy",
+      "Value" : { "Ref" : "policy" }
+    },
+    "SECVPNServerExternal" : {
+      "Description" : "VPN Server Security Group - external traffic",
+      "Value" : { "Ref" : "SECVPNServerExternal" }
+    },
+    "SECVPNServerInternal" : {
+      "Description" : "VPN Server Security Group - internal traffic",
+      "Value" : { "Ref" : "SECVPNServerInternal" }
+    }
+  }
+}

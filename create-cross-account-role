@@ -1,0 +1,73 @@
+#!/bin/bash
+#
+# Create a cross account role in the target account.  This uses the CLI instead
+# of cloudformation because CF does not let you name the role.  Roles created
+# through CF have names that end in a variable hex string.  That variable
+# suffix makes them useless when you want the same role name to exist in
+# multiple target accounts.
+#
+# The calling environment must contain the required credentials for the target
+# account.  The 'account' environment variable must point at the target account.
+#
+# The source account number should always be our central account that does
+# cross account administration.
+#
+# NOTE: This is a very basic script that is only designed to create a standard
+#       set of cross account roles.  It is not designed to update existing
+#       roles.
+#
+#       In particular this script will not change the MFA required flag if the
+#       role already exists, nor will it delete policies from an existing role.
+#       If you want those type of changes then delete the existing role and let
+#       this script create a clean version of the role.
+#
+# Parameters are:
+#   Role name on the target account.
+#   Policy ARN list on the target account.  Quoted string with spaces between
+#   multiple ARNs.
+#   MFA required (true or false).
+
+set -e
+set -o pipefail
+
+role_name=${1:?"Missing role name"}
+policy_arn_list=${2:?"Missing policy ARN list"}
+mfa_required=${3:?"Missing MFA required"}
+shift 3
+
+source ./functions
+
+case "${mfa_required:?}" in
+	true) condition=', "Condition": { "Bool": { "aws:MultiFactorAuthPresent": "true" } }'; ;;
+	false) condition=''; ;;
+	*) echo "mfa_required must be true or false, not '$mfa_required'" >&2; exit 1; ;;
+esac
+
+source_account_number=$(./map-account-number "${CENTRAL_ACCOUNT:?}")
+
+policy=$(cat << EODATA
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "sts:AssumeRole",
+      "Principal": { "AWS": "${source_account_number:?}" }$condition
+    }
+  ]
+}
+EODATA
+)
+
+# Create the role if it does not already exist.
+
+aws iam get-role --role-name ${role_name:?} > /dev/null 2>&1 ||
+	aws iam create-role --role-name ${role_name:?} --assume-role-policy-document "$policy"
+
+# Attach the policies to the role.  This does not complain if a polciy is
+# already attached.
+
+for p in ${policy_arn_list:?}
+do
+	aws iam attach-role-policy --role-name ${role_name:?} --policy-arn $p
+done

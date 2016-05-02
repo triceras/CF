@@ -1,0 +1,46 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  "Description" : "Add a VPN to an existing VPC/VGW",
+  "Resources" : {
+    "CustomerGateway" : {
+      "Type" : "AWS::EC2::CustomerGateway",
+      "Properties" : {
+        "Type" : "ipsec.1",
+        "BgpAsn" : "65032",
+        "IpAddress" : "116.240.201.165",
+        "Tags" : [
+          { "Key" : "Name", "Value" : "Gateway to King St"}
+        ]
+      }
+    },
+    "VPNConnection" : {
+      "DependsOn" : ["CustomerGateway"],
+      "Type" : "AWS::EC2::VPNConnection",
+      "Properties" : {
+        "Type" : "ipsec.1",
+        "StaticRoutesOnly" : "true",
+        "CustomerGatewayId" : { "Ref" : "CustomerGateway" },
+        "VpnGatewayId" : "vgw-061c2f1b",
+        "Tags" : [{ "Key" : "Name", "Value" : "ap-southeast-2-vpn-king-st" }]
+      }
+    },
+    "VPNConnectionRoute0A32320017" : {
+      "DependsOn" : ["VPNConnection"],
+      "Type" : "AWS::EC2::VPNConnectionRoute",
+      "Properties" : {
+        "VpnConnectionId" : { "Ref" : "VPNConnection" },
+        "DestinationCidrBlock" : "10.50.50.0/23"
+      }
+    }
+  },
+  "Outputs" : {
+    "VPNCustomerGatewayId" : {
+      "Description" : "CustomerGateway Id",
+      "Value" : { "Ref" : "CustomerGateway" }
+    },
+    "VPNConnectionId" : {
+      "Description" : "VPNConnection Id",
+      "Value" : { "Ref" : "VPNConnection" }
+    }
+  }
+}

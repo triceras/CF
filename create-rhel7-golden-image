@@ -1,0 +1,371 @@
+#!/bin/bash
+
+# Create a RHEL7 golden image, power it off, convert to AMI and promote that
+# AMI to all regions.
+#
+# No parameters.
+
+set -e
+set -o pipefail
+
+# Build the golden image in the central account then promote it as an AMI
+# to all regions.  Give all accounts that run instances the authority to use
+# this AMI.
+
+export operatingsystem=RHEL
+source ./functions
+
+# Hardwire the account, VPC stack name, common security stack name and zone
+# number.  The instance is deleted after the AMIs are built so these values are
+# almost irrelevant.
+
+export account=${CENTRAL_ACCOUNT:?}
+source ./network-variables
+source ./sts-assume-admin $account
+
+vpc_stack_name=${region:?}-vpc
+common_security_stack_name=${region:?}-common-security
+zone_number=1
+
+eval $(stack_outputs $vpc_stack_name)
+eval $(stack_outputs $common_security_stack_name)
+
+# Need the AMI for RedHat 7.2 in this account.
+
+# Override these settings from the environment if necessary.
+# Sample name: RHEL-7.2_HVM_GA-20151112-x86_64-1-Hourly2-GP2
+
+: ${AMI_NAME=RHEL-7.2_HVM_GA}
+: ${AMI_DATE=20151112}
+: ${AMI_SUFFIX=-x86_64-1-Hourly2-GP2}
+: ${AMI_OWNER=309956199498}
+
+rm -f /tmp/RHEL7Map
+JSON_FILE=/tmp/RHEL7Map json_fragment << EODATA
+    "AmiMap" : {
+      "$region" : { "AMI" : "$(aws ec2 describe-images --region $region --owners $AMI_OWNER --filters Name=name,Values=$AMI_NAME-$AMI_DATE$AMI_SUFFIX --query='Images[*].ImageId' --output text)" }
+   },
+EODATA
+
+# Always build the instance from scratch.
+
+./delete-stack ${region:?} ${stack_name:?}
+
+json_fragment << 'EODATA'
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "Define a RHEL7 golden image",
+
+  "Parameters" : {
+EODATA
+
+json_fragment < keypairname
+
+json_fragment << 'EODATA'
+  },
+
+  "Mappings" : {
+EODATA
+
+json_fragment < /tmp/RHEL7Map
+
+json_fragment << 'EODATA'
+  },
+
+  "Resources" : {
+EODATA
+
+resource=rhel7golden
+zone_Suffix=$(zone_number_to_Suffix ${zone_number:?})
+
+# Building all the packages for the golden images is slow, allow 20 minutes.
+# Zabbix alone takes 5 minutes to install.
+
+json_fragment << EODATA
+    "${resource}" : {
+      "Type" : "AWS::EC2::Instance",
+      "CreationPolicy" : {
+	"ResourceSignal" : {
+	  "Timeout" : "PT20M"
+	}
+      },
+
+      "Metadata" : {
+	"AWS::CloudFormation::Init" : {
+	  "configSets" : {
+	    "default"    : [ "goldenbase" ]
+	  },
+	  "goldenbase" : {
+	    "files" : {
+EODATA
+
+# RHEL7 is missing service iptables
+fixed_file /etc/init.d/iptables 000755
+
+# Signal the DNS servers that an instance has booted, may need to update DNS.
+fixed_file /etc/init.d/boot_signal 000755
+
+# cfn-hup creates .bak files when CF changes a file.  Some services (e.g. cron)
+# will execute those .bak files, causing errors.  Delete all .bak files under
+# /etc every 10 minutes.
+#
+# Do not delete .bak files under /var, some of the puppet application
+# repositories have .bak files :-(.
+
+fixed_file /etc/cron.d/delete_bak 000644
+
+# Local logrotate defaults from Guill
+fixed_file /etc/logrotate.conf 000644
+
+# Local shell defaults from Guill
+fixed_file /etc/profile.d/custom.sh 000644
+
+json_fragment << EODATA
+	    # end of files
+	    }
+	  }
+	# End of AWS::CloudFormation::Init
+	}
+      # End of Metadata
+      },
+
+      "Properties" : {
+        "InstanceType" : "t2.small",
+	"DisableApiTermination" : "false",
+        "KeyName"  : { "Ref" : "KeyPairName" },
+        "ImageId" : { "Fn::FindInMap" : [ "AmiMap", { "Ref" : "AWS::Region" }, "AMI" ]},
+        "NetworkInterfaces" : [{
+          "GroupSet"                 : [ "${SECCommonInternal:?}" ],
+          "AssociatePublicIpAddress" : "false",
+          "DeviceIndex"              : "0",
+          "DeleteOnTermination"      : "true",
+          "SubnetId"                 : "$(eval echo \${VPCPrivateSubnet$zone_Suffix:?})"
+        }],
+	"BlockDeviceMappings" : [
+          {
+	    "DeviceName" : "/dev/sda1",
+	    "Ebs" : { "VolumeSize" : "12" }
+          },
+	  {
+	    "DeviceName" : "/dev/sdb",
+	    "Ebs" : { "VolumeSize" : "4" }
+	  }
+	],
+	"Tags" : [
+	  { "Key" : "Name", "Value" : "${resource}" }
+	],
+EODATA
+
+# Generate userdata for RHEL7 golden image.  Disable selinux, update all
+# packages, install extra packages then signal completion.
+#
+# The golden image has puppet installed but it does not run puppet agent.  The
+# instance is shut down immediately after configuration so it can be converted
+# to an AMI - there is no point in running puppet agent.
+#
+# This userdata is unique to the golden image so it is built inline.  There is
+# no point in using a separate file to build unique data.
+#
+# This is a bit messy because some of the userdata uses shell variables.  Some
+# of those variables need to be expanded in the current context, some are to be
+# left as is.  Generate the entire userdata from a series of sections, some of
+# which allow expansion, others do not.
+#
+# A marker of EODATA is for the userdata itself.  A marker of EODATA2 is a
+# nested command inside the userdata that also uses here docs.
+
+admin_password='$1$qLzzvQf6$Xuk28f1APlF3U/1YuSNYS0'
+
+(
+	# Shell expansion in this section.
+
+	cat << EODATA
+Content-Type: multipart/mixed; boundary="===============${resource}=="
+MIME-Version: 1.0
+
+--===============${resource}==
+Content-Type: text/cloud-config; charset="us-ascii"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+Content-Disposition: attachment; filename="cloud-config"
+
+#cloud-config
+
+bootcmd:
+  - setenforce 0
+  - sed -i '/^\s*SELINUX=/s/.*/SELINUX=disabled/;' /etc/sysconfig/selinux /etc/selinux/config
+
+ssh_pwauth: true
+
+--===============${resource}==
+Content-Type: text/x-shellscript; charset="us-ascii"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+Content-Disposition: attachment; filename="boot-script"
+
+#!/bin/bash -x
+
+# Remove packages that are useless on a server or they are included in RHEL7
+# but we do not want them.
+
+service NetworkManager stop
+
+yum erase -y \
+	sendmail \
+	NetworkManager \
+	NetworkManager-config-server \
+	NetworkManager-libnm \
+	avahi-libs \
+	btrfs-progs \
+	desktop-file-utils \
+	emacs-filesystem \
+	gdisk \
+	gsettings-desktop-schemas \
+	jansson \
+	wpa_supplicant \
+
+### See http://intra:8080/display/Whispir/AWS+RHEL7+AMI+Golden+Image
+cd /tmp
+# Add the epel repository
+curl -s -o epel-release-latest-7.noarch.rpm https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm
+rpm -i epel-release-latest-7.noarch.rpm
+# awscli is in epel.  awscli -> python2-botocore -> python-docutils.
+# python-docutils is in rhui-REGION-rhel-server-optional so enable that repo.
+yum-config-manager --enable rhui-REGION-rhel-server-optional
+# Packages required for aws-cfn-bootstrap and aws cli
+yum install -y python-pip python-daemon pystache awscli
+curl -s -o aws-cfn-bootstrap-latest.tar.gz https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-latest.tar.gz
+mkdir aws-cfn-bootstrap
+cd aws-cfn-bootstrap
+tar xzf ../aws-cfn-bootstrap-latest.tar.gz
+cd aws-cfn-bootstrap*
+python setup.py install
+cp /usr/init/redhat/cfn-hup /etc/init.d/
+chmod a+x /etc/init.d/cfn-hup
+# Amazon installs aws-cfn-bootstrap into /opt/aws so add that path
+mkdir -p /opt/aws
+ln -s /usr/bin/ /opt/aws/
+
+# Position the golden image for running puppet agent but do not run puppet
+# agent.  The golden image has no role and there is no point in registering it
+# with the puppetmaster when it will be immediately shut down.
+
+yum install -y puppet
+
+# Install packages that are required or desirable on every RHEL7 based system.
+
+yum install -y \
+	${package_nc:?} \
+	atop \
+	bind-utils \
+	bzip2 \
+	curl \
+	iotop \
+	lvm2 \
+	lsof \
+	lynx \
+	net-tools \
+	openssl \
+	perl \
+	postfix \
+	pstree \
+	rsync \
+	strace \
+	tcpdump \
+	telnet \
+	tree \
+	vim \
+	wget \
+
+# Install zabbix tools.
+
+groupadd -g 514 zabbix
+useradd -g 514 -u 514 zabbix
+echo 'zabbix ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/zabbix
+
+rpm -Uvh http://repo.zabbix.com/zabbix/3.0/rhel/7/x86_64/zabbix-release-3.0-1.el7.noarch.rpm
+yum install -y \
+	zabbix-agent \
+	zabbix-get \
+	zabbix-sender \
+
+# All servers run with local time set to UTC.
+
+ls -sf /usr/share/zoneinfo/UTC /etc/localtime
+
+# Add a last ditch user, including encrypted password.  Unfortunately that
+# requires password authentication over ssh.  cloud-init ssh_pwauth controls
+# that setting.  Anything you do to sshd_config here will be overwritten by
+# cloud-init.
+
+groupadd -g 1500 admin
+useradd -g 1500 -u 1500 admin
+sed -i -e 's%^admin:[^:]*:\(.*\)%admin:${admin_password:?}:\1%' /etc/shadow
+echo 'admin ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/admin
+
+mkswap /dev/xvdb
+echo '/dev/xvdb swap swap defaults 0 0' >> /etc/fstab
+EODATA
+
+	# No shell expansion in this section.
+
+	cat << 'EODATA'
+
+# Prevent extra repositories being used by mistake
+
+yum-config-manager --disable epel
+yum-config-manager --disable rhui-REGION-rhel-server-optional
+
+yum update -y
+
+# Moving the AMI from one region to another picks up different RedHat
+# repositories which can have different contents.  Not sure why this happens,
+# but it has happened at least once, giving 'Not using downloaded repomd.xml
+# because it is older than what we have' and breaking the new instance.  Clean
+# out yum before shutdown.
+
+yum clean all
+EODATA
+
+	# Shell expansion in this section.
+
+	cat << EODATA
+
+# Install the files and packages from the metadata
+/opt/aws/bin/cfn-init -v --stack ${stack_name:?} --resource ${resource:?} --region ${region:?}
+# Signal the status from cfn-init
+/opt/aws/bin/cfn-signal -e \$? --stack ${stack_name:?} --resource ${resource:?} --region ${region:?}
+
+--===============${resource}==--
+EODATA
+
+) | base64 | tr -d '\n' | sed -e 's/^/        "UserData": "/; s/$/",/' | json_fragment
+
+json_fragment << 'EODATA'
+      }
+    }
+  },
+
+  "Outputs" : {
+EODATA
+
+json_fragment << EODATA
+    "${resource}InstanceId" : {
+      "Description" : "Instance Id for latest RHEL7 golden image",
+      "Value" : { "Ref": "${resource}" }
+    }
+  }
+}
+EODATA
+
+build_stack
+
+eval $(stack_outputs ${stack_name:?})
+eval instance_id=\${${resource:?}InstanceId:?}
+
+./create-ami ${region:?} ${resource:?} ${instance_id:?} 'RHEL7 golden image' ./generate-rhel7-golden-list
+
+# No point in keeping the stack and getting charged for the instance storage.
+
+./delete-stack ${region:?} ${stack_name:?}

@@ -1,0 +1,284 @@
+#!/bin/bash
+
+# Create or update a VPN server instance.
+#
+# The calling environment must contain the required credentials for the target
+# account.
+#
+# Parameters are:
+#   Region.
+#   VPC stack name.
+#   Common security stack name.
+#   Common VPN resources stack name.
+#   Stack for ec2 role.
+#   Zone number for this instance.
+
+# VPN servers need multiple NICs.  One NIC (eth0) is for the internal traffic
+# and is not usable by the outside world.  The second NIC (eth1) is only used
+# for VPNs.  Using separate NICs makes it easier and safer to write the AWS
+# security groups.
+#
+# eth1 can have multiple EIPs associated with it so eth1 needs multiple private
+# IPs, one for each EIP which could be associated with the VPN server.  IOW,
+# eth1 needs a private IP for every public VPN IP that we publish and that
+# could be assigned to this VPN server.
+#
+# Using a t2.small instance allows for 2 NICs with 4 private IPs per NIC.
+#
+# FIXME: Every instance gets the same number of secondary NICs with the same
+#        number of secondary IPs.  Can it be tuned to match the value of
+#        external_vpn_ips so each instance gets exactly the right number of
+#        secondary IPs instead of being over provisioned?
+
+set -e
+set -o pipefail
+
+region=${1:?"Missing region name"}
+vpc_stack_name=${2:?"Missing VPC stack name"}
+common_security_stack_name=${3:?"Missing common security stack name"}
+common_vpn_resources_stack_name=${4:?"Missing common vpn resources stack name"}
+ec2_role_stack_name=${5:?"Missing ec2 role stack name"}
+zone_number=${6:?"Missing zone number"}
+shift 6
+
+export operatingsystem=RHEL
+
+STACK_NAME=${region}-vpn-server-instance-${zone_number}
+source ./functions
+
+get_vpc_data $vpc_stack_name
+eval $(stack_outputs $common_security_stack_name)
+eval $(stack_outputs $common_vpn_resources_stack_name)
+eval $(stack_outputs $ec2_role_stack_name)
+
+json_fragment << 'EODATA'
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "Define a VPN server instance",
+
+  "Parameters" : {
+EODATA
+
+json_fragment < keypairname
+
+json_fragment << 'EODATA'
+  },
+
+  "Resources" : {
+EODATA
+
+resource=vpn${zone_number:?}
+zone_Suffix=$(zone_number_to_Suffix ${zone_number:?})
+image_id=$(./choose-ami ${resource:?} generated/${account:?}/stack-${stack_name:?} ${region:?} generated/rhel7-golden-list)
+
+json_fragment << EODATA
+  "eth0" : {
+    "Type" : "AWS::EC2::NetworkInterface",
+    "Properties" : {
+      "GroupSet"                       : [ "${SECCommonInternal:?}", "${SECVPNServerInternal:?}" ],
+      "SubnetId"                       : "$(eval echo \${VPCPrivateSubnet${zone_Suffix:?}:?})",
+      "SourceDestCheck"                : "false",
+      "Tags"                           : [ { "Key" : "Name", "Value" : "${resource}_eth0" } ],
+      "SecondaryPrivateIpAddressCount" : 0
+    }
+  },
+  "eth1" : {
+    "Type" : "AWS::EC2::NetworkInterface",
+    "Properties" : {
+      "GroupSet"                       : [ "${SECICMPExternal:?}", "${SECVPNServerExternal:?}" ],
+      "SubnetId"                       : "$(eval echo \${VPCPublicSubnet${zone_Suffix:?}:?})",
+      "SourceDestCheck"                : "true",
+      "Tags"                           : [ { "Key" : "Name", "Value" : "${resource}_eth1" } ],
+      "SecondaryPrivateIpAddressCount" : 3
+    }
+  },
+EODATA
+
+json_fragment << EODATA
+    "${resource}" : {
+      "Type" : "AWS::EC2::Instance",
+      "CreationPolicy" : {
+	"ResourceSignal" : {
+	  "Timeout" : "PT10M"
+	}
+      },
+
+      "Metadata" : {
+	"AWS::CloudFormation::Init" : {
+
+	  "configSets" : {
+	    "default"    : [ "base", "vpnserver", "puppetrole", "puppetagent" ]
+	  },
+EODATA
+
+EXISTING_JSON_FILE=${JSON_FILE} ./configset-base ${resource}
+puppetrole vpnserver
+puppetagent
+
+# eth0 is handled by the AWS DHCP server.  eth1 cannot be handled by the AWS
+# DHCP server because:
+#
+# a) eth1 has multiple IPs which the DHCP server cannot assign.
+# b) the DHCP server will assign a default route to both eth0 and eth1, but we
+#    only want a default route on eth0 (for security and sanity).
+#
+# Create explicit config entries for eth1.  Bring up the interface with
+# multiple IPs on the single interface.  No alias interfaces (eth1:1 etc.).
+
+json_fragment << 'EODATA'
+	  "vpnserver" : {
+	    "files" : {
+EODATA
+
+# /etc/sysconfig/network-scripts/ETHData.  Built inline because it uses
+# FN::Getatt.  Getatt SecondaryPrivateIpAddresses returns an array which the
+# top level Fn::Join does not accept, have to convert the array to a string
+# using a nested Fn::Join first.
+#
+# /etc/sysconfig/network-scripts/ETHData looks like this:
+#
+# eth_interfaces=(eth0 eth1)
+# eth0_ips=(10.36.60.46 )
+# eth0_network=$(ipcalc -n 10.36.60.46/19 | sed -e 's/.*=//')
+# eth0_prefix=${eth0_network:?}/19
+# eth0_gw=$(echo ${eth0_network:?} | awk -F. '{printf("%s.%s.%s.%s", $1, $2, $3, $4 + 1);}')
+# eth1_ips=(10.36.31.103 10.36.3.217 10.36.3.218 10.36.3.219)
+# eth1_network=$(ipcalc -n 10.36.31.103/19 | sed -e 's/.*=//')
+# eth1_prefix=${eth1_network:?}/19
+# eth1_gw=$(echo ${eth1_network:?} | awk -F. '{printf("%s.%s.%s.%s", $1, $2, $3, $4 + 1);}')
+
+# AWS has a limit on the number of secondary IPs that can be assigned to a NIC.
+# At some stage we will probably need eth2/3/4, so code for the multiple NIC
+# case.
+
+eth_interfaces=(eth0 eth1)
+
+json_fragment << EODATA
+	      "/etc/sysconfig/network-scripts/ETHData" : {
+                "content" : { "Fn::Join" : ["", [
+		  "eth_interfaces=(",
+		    "${eth_interfaces[*]}",
+		    ")\n",
+EODATA
+for eth in ${eth_interfaces[*]}
+do
+	json_fragment << EODATA
+		  "${eth}_ips=(",
+		    { "Fn::GetAtt": [ "${eth}", "PrimaryPrivateIpAddress" ] },
+		    " ",
+		    { "Fn::Join" : [" ", { "Fn::GetAtt": [ "${eth}", "SecondaryPrivateIpAddresses" ] } ] },
+		    ")\n",
+		  "${eth}_network=\$(ipcalc -n ",
+		    { "Fn::GetAtt": [ "${eth}", "PrimaryPrivateIpAddress" ] },
+		    "/19 | sed -e 's/.*=//')",
+		    "\n",
+		  "${eth}_prefix=\${${eth}_network:?}/19",
+		    "\n",
+		  "${eth}_gw=\$(echo \${${eth}_network:?} | awk -F. '{printf(\"%s.%s.%s.%s\", \$1, \$2, \$3, \$4 + 1);}')",
+		    "\n",
+EODATA
+done
+	json_fragment << 'EODATA'
+                  ] ]
+		}
+              },
+EODATA
+
+# /etc/sysconfig/network-scripts/ENIData cannot be built by CF so it has been
+# delegated to Puppet.  ENIData needs the instance id and there is no CF
+# function that gets the instance id.
+
+# VPN servers need to adjust the internal routing tables to direct traffic from
+# us to a remote IP so that traffic goes to the VPN master.  See Puppet
+# modules/vpnserver.  That code needs the set of routing tables that are
+# defined as part of the VPC.  Create /etc/sysconfig/network-scripts/RTBData
+# with lines like:
+#
+# routing_tables_public=( rtb-33155d56 rtb-32155d57 )
+# routing_tables_private=( rtb-3d155d58 rtb-3c155d59 )
+# routing_tables=( ${routing_tables_public[*]} ${routing_tables_private[*]} )
+
+(
+	set -e
+	echo -n 'routing_tables_public=('
+	for zone_Suffix in ${VPCZones:?}
+	do
+		echo -n " $(eval echo \${VPCPublicRouteTable${zone_Suffix:?}:?})"
+	done
+	echo ' )'
+	echo -n 'routing_tables_private=('
+	for zone_Suffix in ${VPCZones:?}
+	do
+		echo -n " $(eval echo \${VPCPrivateRouteTable${zone_Suffix:?}:?})"
+	done
+	echo ' )'
+	echo 'routing_tables=( ${routing_tables_public[*]} ${routing_tables_private[*]} )'
+) | add_file /etc/sysconfig/network-scripts/RTBData 0644
+
+fixed_file /usr/bin/build.vpnserver.eth 000755
+
+fixed_file /etc/facter/facts.d/vpnserver.eth_ips 000755
+
+json_fragment << 'EODATA'
+	    # end of files
+	    },
+	    "commands" : {
+	      "300" : {
+		"command" : "build.vpnserver.eth"
+	      }
+	    # End of commands
+	    }
+	  },
+EODATA
+
+json_fragment << 'EODATA'
+	# End of AWS::CloudFormation::Init
+	}
+      # End of Metadata
+      },
+EODATA
+
+json_fragment << EODATA
+
+      "Properties" : {
+        "InstanceType" : "t2.small",
+	"DisableApiTermination" : "false",
+        "KeyName"  : { "Ref" : "KeyPairName" },
+        "ImageId" : "${image_id:?}",
+        "IamInstanceProfile" : "${EC2ROLEvpnserver:?}",
+        "NetworkInterfaces" : [
+	  {
+	    "DeviceIndex"        : "0",
+	    "NetworkInterfaceId" : { "Ref" : "eth0" }
+	  },
+	  {
+	    "DeviceIndex"        : "1",
+	    "NetworkInterfaceId" : { "Ref" : "eth1" }
+	  }
+	],
+	"Tags" : [
+	  { "Key" : "Name", "Value" : "${resource}" }
+	],
+EODATA
+
+./userdata-rhel7-golden ${resource:?} ${resource:?} ${stack_name:?} | json_fragment
+
+json_fragment << 'EODATA'
+      }
+    }
+  },
+
+  "Outputs" : {
+EODATA
+
+json_fragment << EODATA
+    "${resource}PrivateIP" : {
+      "Description" : "Network interface for VPN traffic",
+      "Value" : { "Fn::GetAtt": [ "${resource}", "PrivateIp" ] }
+    }
+  }
+}
+EODATA
+
+build_stack

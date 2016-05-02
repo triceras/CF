@@ -1,0 +1,10 @@
+#!/bin/bash
+
+# Create network for whispir-sg1
+
+set -e
+set -o pipefail
+
+export account=whispir-sg1
+source ./network-variables
+./network.common

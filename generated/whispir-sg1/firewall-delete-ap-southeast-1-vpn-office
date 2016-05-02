@@ -1,0 +1,117 @@
+config router static
+delete 3303
+end
+config router static
+delete 3302
+end
+config router static
+delete 3301
+end
+config router static
+delete 3300
+end
+config firewall policy
+delete 13326
+end
+config firewall policy
+delete 13325
+end
+config firewall policy
+delete 3326
+end
+config firewall policy
+delete 3325
+end
+config firewall policy
+delete 13324
+end
+config firewall policy
+delete 13323
+end
+config firewall policy
+delete 3324
+end
+config firewall policy
+delete 3323
+end
+config firewall policy
+delete 13322
+end
+config firewall policy
+delete 13321
+end
+config firewall policy
+delete 3322
+end
+config firewall policy
+delete 3321
+end
+config firewall policy
+delete 13320
+end
+config firewall policy
+delete 3320
+end
+config system ipip-tunnel
+delete "aws-sg1-ipip-2"
+end
+config vpn ipsec phase2-interface
+delete "aws-sg1-2-p2"
+end
+config vpn ipsec phase1-interface
+delete "aws-sg1-2"
+end
+config firewall policy
+delete 13316
+end
+config firewall policy
+delete 13315
+end
+config firewall policy
+delete 3316
+end
+config firewall policy
+delete 3315
+end
+config firewall policy
+delete 13314
+end
+config firewall policy
+delete 13313
+end
+config firewall policy
+delete 3314
+end
+config firewall policy
+delete 3313
+end
+config firewall policy
+delete 13312
+end
+config firewall policy
+delete 13311
+end
+config firewall policy
+delete 3312
+end
+config firewall policy
+delete 3311
+end
+config firewall policy
+delete 13310
+end
+config firewall policy
+delete 3310
+end
+config system ipip-tunnel
+delete "aws-sg1-ipip-1"
+end
+config vpn ipsec phase2-interface
+delete "aws-sg1-1-p2"
+end
+config vpn ipsec phase1-interface
+delete "aws-sg1-1"
+end
+config firewall address
+delete "AWS_NET"
+end

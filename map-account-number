@@ -1,0 +1,5 @@
+#!/bin/bash
+
+# Given an AWS account number or name, return the account number.
+
+awk -v input="${1:?}" -F'|' '/^\|\|/{next}$2 == input || $3 == input{print $2; found=1;}END{if(!found) { printf("Unknown account number %s\n", input) > "/dev/stderr"; exit 1;} }' < accounts

@@ -1,0 +1,45 @@
+# Not a stand alone script, you must source this code fragment.  It changes the
+# environment of the caller.
+#
+# You can supply an account name or an account number, this code maps one to
+# the other.
+#
+# Parameters are:
+#   Account name.
+#   Role name.
+#   Need AWS_SECURITY_TOKEN (true or false).
+
+account=${1:?"Missing account name"}
+role_name=${2:?"Missing role name"}
+need_aws_security_token=${3:?"Missing need AWS_SECURITY_TOKEN"}
+shift 3
+
+NO_JSON_FILE=1 source ./functions
+
+case "${need_aws_security_token}" in
+	true) [ -n "$AWS_SECURITY_TOKEN" ] || (echo "No AWS_SECURITY_TOKEN, do 'source sts-get-session-token <MFA_token>' first" >&2; exit 1); ;;
+	false) ;;
+	*) echo "need_aws_security_token must be true or false, not '${need_aws_security_token}'" >&2; exit 1;;
+esac
+
+(
+	set -e
+	set -o pipefail
+
+	account_number=$(./map-account-number $account)
+	[ -n "$account_number" ]
+	account_name=$(./map-account-name $account)
+	[ -n "$account_name" ]
+	echo Account $account_name $account_number
+	aws sts assume-role \
+		--role-arn arn:aws:iam::$account_number:role/${role_name:?} \
+		--role-session-name "$(whoami)" \
+		--output text | \
+	export_credentials > /tmp/credentials-$$
+	echo export account=$account_name >> /tmp/credentials-$$
+	echo export account_name=$(./map-account-name $account_name) >> /tmp/credentials-$$
+	echo export account_number=$(./map-account-number $account_name) >> /tmp/credentials-$$
+)
+
+[ ! -s /tmp/credentials-$$ ] || source /tmp/credentials-$$
+rm -f /tmp/credentials-$$

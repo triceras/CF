@@ -1,0 +1,78 @@
+#!/bin/bash
+
+# Copy an AMI to all the regions where it does not already exist.
+# we use.
+#
+# The calling environment must contain the required credentials for the account
+# that owns the AMI.
+#
+# Parameters are:
+#   Current region, it already has a copy of the AMI.
+#   AMI name.
+#   AMI image id.
+
+set -e
+set -o pipefail
+
+region=${1:?"Missing AMI name"}
+image_name=${2:?"Missing AMI name"}
+source_image_id=${3:?"Missing AMI id"}
+shift 3
+
+# Loop over all accounts that have a region, i.e. they run instances.
+
+declare -A ami_copied
+
+# By definition, the current region already has a copy of the AMI.
+
+ami_copied[${region:?}]=${source_image_id:?}
+owner=$(./map-account-number ${account:?})
+
+# Remember that piping the output of a command into a while loop means that the
+# while loop runs in a sub shell.  Any changes to global variables inside the
+# sub shell are lost when the loop finishes.  Use a temporary file instead of a
+# pipe to keep the loops in this shell.
+
+tmp_file=$(mktemp)
+awk -F'|' '/^\|\|/{next} $7 !~ /^ *$/{print $3 " " $7}' < accounts > ${tmp_file:?}
+# The legacy whispir account might want to use these AMIs so give it
+# permission.  That needs a kludge to pretend that the legacy account is in CF.
+echo whispir ap-southeast-2 >> ${tmp_file:?}
+while read target_account target_region
+do
+	if [[ -n "${ami_copied[${target_region:?}]}" ]]
+	then
+		continue
+	fi
+
+	target_image_id=$(
+		aws ec2 describe-images \
+			--region ${target_region:?} \
+			--owner ${owner:?} \
+			--filter Name=name,Values=${image_name:?} \
+			--query 'Images[*].[ImageId]' \
+			--output text
+	)
+
+	if [[ -n "${target_image_id}" ]]
+	then
+		ami_copied[${target_region:?}]}=${target_image_id}
+		echo ${image_name:?} in ${target_region:?} is ${target_image_id:?}
+		continue
+	fi
+
+	# No copy of this AMI in this target region, copy it.
+	target_image_id=$(
+		echo $(
+			aws ec2 copy-image \
+				--region ${target_region:?} \
+				--source-region ${region:?} \
+				--source-image-id ${source_image_id:?} \
+				--name ${image_name:?}
+		) | sed -e 's/"[^"]*$//; s/.*"//;'
+	)
+	ami_copied[${target_region:?}]=${target_image_id:?}
+	echo ${image_name:?} in ${target_region:?} is ${target_image_id:?}
+
+done < ${tmp_file:?}
+rm -f ${tmp_file:?}

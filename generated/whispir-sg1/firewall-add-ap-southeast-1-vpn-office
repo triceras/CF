@@ -1,0 +1,378 @@
+# Account: whispir-sg1
+# Region: ap-southeast-1
+# Firewall type: Fortigate
+# Firewall interface: wan1
+# VPC stack: ap-southeast-1-vpc
+# VPC id: vpc-1310b376
+# VPN stack: ap-southeast-1-vpn-office
+# VPN Connection Id: vpn-938702ba
+# Customer gateway ip: 203.191.201.76
+# Network base: 33
+
+config firewall address
+    edit "AWS_NET"
+        set comment "Addresses assigned to AWS accounts"
+        set subnet 10.32.0.0 255.240.0.0
+end
+config vpn ipsec phase1-interface
+    edit "aws-sg1-1"
+        set interface "wan1"
+        set local-gw 203.191.201.76
+        set dhgrp 2
+        set proposal aes128-sha1
+        set remote-gw 54.179.191.15
+        set psksecret IA00jeM6i79N2RuIFmmu7SCKia__54Y6
+        set dpd-retryinterval 10
+end
+config vpn ipsec phase2-interface
+    edit "aws-sg1-1-p2"
+        set phase1name "aws-sg1-1"
+        set proposal aes128-sha1
+        set dhgrp 2
+        set keylifeseconds 3600
+end
+config system ipip-tunnel
+    edit "aws-sg1-ipip-1"
+        set interface "aws-sg1-1"
+        set local-gw 10.1.162.1
+        set remote-gw 10.33.0.10
+end
+config system interface
+    edit "aws-sg1-ipip-1"
+        set allowaccess ping
+        set snmp-index 3311
+        set mtu-override enable
+        set mtu 1300
+end
+config firewall policy
+    edit 3310
+        set srcintf "aws-sg1-1"
+        set dstintf "any"
+        set srcaddr "AWS_NET"
+        set dstaddr "AWS_NET"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit 13310
+        set srcintf "aws-sg1-ipip-1"
+        set dstintf "any"
+        set srcaddr "AWS_NET"
+        set dstaddr "AWS_NET"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit 3311
+        set srcintf "port1"
+        set dstintf "aws-sg1-1"
+        set srcaddr "all"
+        set dstaddr "AWS_NET"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit 3312
+        set srcintf "aws-sg1-1"
+        set dstintf "port1"
+        set srcaddr "AWS_NET"
+        set dstaddr "all"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit 13311
+        set srcintf "port1"
+        set dstintf "aws-sg1-ipip-1"
+        set srcaddr "all"
+        set dstaddr "AWS_NET"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit 13312
+        set srcintf "aws-sg1-ipip-1"
+        set dstintf "port1"
+        set srcaddr "AWS_NET"
+        set dstaddr "all"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit 3313
+        set srcintf "port2"
+        set dstintf "aws-sg1-1"
+        set srcaddr "all"
+        set dstaddr "AWS_NET"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit 3314
+        set srcintf "aws-sg1-1"
+        set dstintf "port2"
+        set srcaddr "AWS_NET"
+        set dstaddr "all"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit 13313
+        set srcintf "port2"
+        set dstintf "aws-sg1-ipip-1"
+        set srcaddr "all"
+        set dstaddr "AWS_NET"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit 13314
+        set srcintf "aws-sg1-ipip-1"
+        set dstintf "port2"
+        set srcaddr "AWS_NET"
+        set dstaddr "all"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit 3315
+        set srcintf "port4"
+        set dstintf "aws-sg1-1"
+        set srcaddr "all"
+        set dstaddr "AWS_NET"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit 3316
+        set srcintf "aws-sg1-1"
+        set dstintf "port4"
+        set srcaddr "AWS_NET"
+        set dstaddr "all"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit 13315
+        set srcintf "port4"
+        set dstintf "aws-sg1-ipip-1"
+        set srcaddr "all"
+        set dstaddr "AWS_NET"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit 13316
+        set srcintf "aws-sg1-ipip-1"
+        set dstintf "port4"
+        set srcaddr "AWS_NET"
+        set dstaddr "all"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+end
+config system interface
+    edit "aws-sg1-1"
+        set vdom "root"
+#       set ip 169.254.28.118 255.255.255.255
+        set allowaccess ping
+        set type tunnel
+        set tcp-mss 1387
+#       set remote-ip 169.254.28.117
+        set snmp-index 3310
+        set interface "wan1"
+end
+
+config vpn ipsec phase1-interface
+    edit "aws-sg1-2"
+        set interface "wan1"
+        set local-gw 203.191.201.76
+        set dhgrp 2
+        set proposal aes128-sha1
+        set remote-gw 54.254.250.135
+        set psksecret DeWT6iRNOoIqx.XvSgXgepZqFzg8UfIh
+        set dpd-retryinterval 10
+end
+config vpn ipsec phase2-interface
+    edit "aws-sg1-2-p2"
+        set phase1name "aws-sg1-2"
+        set proposal aes128-sha1
+        set dhgrp 2
+        set keylifeseconds 3600
+end
+config system ipip-tunnel
+    edit "aws-sg1-ipip-2"
+        set interface "aws-sg1-2"
+        set local-gw 10.1.162.1
+        set remote-gw 10.33.64.10
+end
+config system interface
+    edit "aws-sg1-ipip-2"
+        set allowaccess ping
+        set snmp-index 3321
+        set mtu-override enable
+        set mtu 1300
+end
+config firewall policy
+    edit 3320
+        set srcintf "aws-sg1-2"
+        set dstintf "any"
+        set srcaddr "AWS_NET"
+        set dstaddr "AWS_NET"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit 13320
+        set srcintf "aws-sg1-ipip-2"
+        set dstintf "any"
+        set srcaddr "AWS_NET"
+        set dstaddr "AWS_NET"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit 3321
+        set srcintf "port1"
+        set dstintf "aws-sg1-2"
+        set srcaddr "all"
+        set dstaddr "AWS_NET"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit 3322
+        set srcintf "aws-sg1-2"
+        set dstintf "port1"
+        set srcaddr "AWS_NET"
+        set dstaddr "all"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit 13321
+        set srcintf "port1"
+        set dstintf "aws-sg1-ipip-2"
+        set srcaddr "all"
+        set dstaddr "AWS_NET"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit 13322
+        set srcintf "aws-sg1-ipip-2"
+        set dstintf "port1"
+        set srcaddr "AWS_NET"
+        set dstaddr "all"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit 3323
+        set srcintf "port2"
+        set dstintf "aws-sg1-2"
+        set srcaddr "all"
+        set dstaddr "AWS_NET"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit 3324
+        set srcintf "aws-sg1-2"
+        set dstintf "port2"
+        set srcaddr "AWS_NET"
+        set dstaddr "all"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit 13323
+        set srcintf "port2"
+        set dstintf "aws-sg1-ipip-2"
+        set srcaddr "all"
+        set dstaddr "AWS_NET"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit 13324
+        set srcintf "aws-sg1-ipip-2"
+        set dstintf "port2"
+        set srcaddr "AWS_NET"
+        set dstaddr "all"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit 3325
+        set srcintf "port4"
+        set dstintf "aws-sg1-2"
+        set srcaddr "all"
+        set dstaddr "AWS_NET"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit 3326
+        set srcintf "aws-sg1-2"
+        set dstintf "port4"
+        set srcaddr "AWS_NET"
+        set dstaddr "all"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit 13325
+        set srcintf "port4"
+        set dstintf "aws-sg1-ipip-2"
+        set srcaddr "all"
+        set dstaddr "AWS_NET"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit 13326
+        set srcintf "aws-sg1-ipip-2"
+        set dstintf "port4"
+        set srcaddr "AWS_NET"
+        set dstaddr "all"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+end
+config system interface
+    edit "aws-sg1-2"
+        set vdom "root"
+#       set ip 169.254.28.242 255.255.255.255
+        set allowaccess ping
+        set type tunnel
+        set tcp-mss 1387
+#       set remote-ip 169.254.28.241
+        set snmp-index 3320
+        set interface "wan1"
+end
+
+config router static
+    edit 3300
+        set device "aws-sg1-1"
+        set dst 10.33.0.0 255.255.0.0
+        set priority 0
+    next
+    edit 3301
+        set device "aws-sg1-2"
+        set dst 10.33.0.0 255.255.0.0
+        set priority 0
+    next
+    edit 3302
+        set device "aws-sg1-ipip-1"
+        set dst 10.33.0.0 255.255.0.0
+        set priority 1
+    next
+    edit 3303
+        set device "aws-sg1-ipip-2"
+        set dst 10.33.0.0 255.255.0.0
+        set priority 1
+    next
+end

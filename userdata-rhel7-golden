@@ -1,0 +1,53 @@
+#!/bin/bash
+
+# Generate userdata for a server based on our RHEL7 golden image as MIME
+# multipart and base64 encoded.  This extends the RHEL7 golden image with the
+# real host name plus the commands from the meta data.
+#
+# The cloud-config section lets us use the early boot code that cloud-init
+# runs.  The x-shellscript section runs our late boot script.  Using two
+# sections means we have to supply data in MIME multipart format.
+#
+# Cloud Formation wants UserData as a base64 encoded string.  The actual
+# representation of the string has no embedded newlines and is quoted.
+# Building multipart inside CF is messy so this code generates the raw base64
+# string itself.  All CF sees is
+#
+#   "UserData" : "very_long_base64_string",
+
+set -e
+set -o pipefail
+
+resource="${1:?"Missing resource name"}"
+hostname="${2:?"Missing hostname"}"
+stack_name="${3:?"Missing stack name"}"
+
+base64 << EODATA | tr -d '\n' | sed -e 's/^/"UserData": "/; s/$/",/'
+Content-Type: multipart/mixed; boundary="===============${resource}=="
+MIME-Version: 1.0
+
+--===============${resource}==
+Content-Type: text/cloud-config; charset="us-ascii"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+Content-Disposition: attachment; filename="cloud-config"
+
+#cloud-config
+
+ssh_pwauth: true
+fqdn: ${hostname:?}.${VPCDomain:?}
+
+--===============${resource}==
+Content-Type: text/x-shellscript; charset="us-ascii"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+Content-Disposition: attachment; filename="boot-script"
+
+#!/bin/bash -x
+# Install the files and packages from the metadata
+/opt/aws/bin/cfn-init -v --stack ${stack_name:?} --resource ${resource:?} --region ${region:?}
+# Signal the status from cfn-init
+/opt/aws/bin/cfn-signal -e \$? --stack ${stack_name:?} --resource ${resource:?} --region ${region:?}
+
+--===============${resource}==--
+EODATA

@@ -1,0 +1,22 @@
+# Not a stand alone script, you must source this code fragment.  It changes the
+# environment of the caller.
+#
+# Given the account name, generate and run commands to export associated
+# variables from the accounts file.
+#
+# awk | <some_command> runs some_command in a sub shell which means the export
+# commands are run against the wrong shell.  Use a temporary file instead.
+
+awk -v input=${account:?} -F'|' '
+	/^\|\|/{next}
+	$3 == input{
+		print "export region=" $7;
+		print "export availability_zones=\"" $8 "\"";
+		print "export network_base=" $5;
+		print "export install_applications=" $9;
+		if ($10 !~ /^ *$/) { print "export hub_name=" $10 }
+		print "export external_vpn_ips=" $11;
+	}
+' < accounts > /tmp/network-variables-$$
+source /tmp/network-variables-$$
+rm -f /tmp/network-variables-$$

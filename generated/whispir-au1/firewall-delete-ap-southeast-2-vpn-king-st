@@ -1,0 +1,69 @@
+config router static
+delete 3203
+end
+config router static
+delete 3202
+end
+config router static
+delete 3201
+end
+config router static
+delete 3200
+end
+config firewall policy
+delete 13222
+end
+config firewall policy
+delete 13221
+end
+config firewall policy
+delete 3222
+end
+config firewall policy
+delete 3221
+end
+config firewall policy
+delete 13220
+end
+config firewall policy
+delete 3220
+end
+config system gre-tunnel
+delete "aws-au1-ipip-2"
+end
+config vpn ipsec phase2-interface
+delete "aws-au1-2-p2"
+end
+config vpn ipsec phase1-interface
+delete "aws-au1-2"
+end
+config firewall policy
+delete 13212
+end
+config firewall policy
+delete 13211
+end
+config firewall policy
+delete 3212
+end
+config firewall policy
+delete 3211
+end
+config firewall policy
+delete 13210
+end
+config firewall policy
+delete 3210
+end
+config system gre-tunnel
+delete "aws-au1-ipip-1"
+end
+config vpn ipsec phase2-interface
+delete "aws-au1-1-p2"
+end
+config vpn ipsec phase1-interface
+delete "aws-au1-1"
+end
+config firewall address
+delete "AWS_NET"
+end

@@ -1,0 +1,36 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  "Description" : "Define an IAM role for util instances",
+  "Resources" : {
+    "Role": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version" : "2012-10-17",
+          "Statement": [ {
+            "Effect": "Allow",
+            "Principal": {
+              "Service": [ "ec2.amazonaws.com" ]
+            },
+            "Action": [ "sts:AssumeRole" ]
+         } ]
+       },
+       "Path": "/",
+       "ManagedPolicyArns": [ "arn:aws:iam::aws:policy/AmazonEC2ReadOnlyAccess", "arn:aws:iam::aws:policy/AmazonElastiCacheReadOnlyAccess", "arn:aws:iam::aws:policy/AmazonRDSReadOnlyAccess", "arn:aws:iam::283928602837:policy/allow-assume-ec2-route53-full-role" ]
+      }
+    },
+    "InstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "Path": "/",
+        "Roles": [ { "Ref": "Role" } ]
+      }
+    }
+  },
+  "Outputs" : {
+    "EC2ROLEutil" : {
+      "Description" : "InstanceProfileId",
+      "Value" : { "Ref" : "InstanceProfile" }
+    }
+  }
+}

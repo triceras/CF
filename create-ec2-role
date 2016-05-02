@@ -1,0 +1,70 @@
+#!/bin/bash
+
+# Create or update an EC2 role and its associated instance profile.
+#
+# The calling environment must contain the required credentials for the target
+# account.
+#
+# Parameters are:
+#   region name.
+#   My stack name.
+#   Role name.
+#   Policy ARN list, space delimited.
+
+set -e
+set -o pipefail
+
+region=${1:?"Missing region name"}
+STACK_NAME=${2:?"Missing stack name"}
+role_name=${3:?"Missing role name"}
+policy_arn_list=${4:?"Missing policy ARN list"}
+shift 4
+
+source ./functions
+
+# Convert the policy arns from a space delimited list to a comma delimited list
+# of quoted arns.
+
+policies="$(bash_list_to_json "${policy_arn_list:?}")"
+
+json_fragment << EODATA
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  "Description" : "Define an IAM role for ${role_name:?} instances",
+  "Resources" : {
+    "Role": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version" : "2012-10-17",
+          "Statement": [ {
+            "Effect": "Allow",
+            "Principal": {
+              "Service": [ "ec2.amazonaws.com" ]
+            },
+            "Action": [ "sts:AssumeRole" ]
+         } ]
+       },
+       "Path": "/",
+       "ManagedPolicyArns": [ $policies ]
+      }
+    },
+    "InstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "Path": "/",
+        "Roles": [ { "Ref": "Role" } ]
+      }
+    }
+  },
+
+  "Outputs" : {
+    "EC2ROLE${role_name:?}" : {
+      "Description" : "InstanceProfileId",
+      "Value" : { "Ref" : "InstanceProfile" }
+    }
+  }
+}
+EODATA
+
+build_stack --capabilities CAPABILITY_IAM

@@ -1,0 +1,114 @@
+#!/bin/bash
+
+# Set up the Route53 cross account roles and policies.  Only the legacy whispir
+# account and the central account (whispir-users) have Route53 data.  Run this
+# by hand to create the cross account roles and policies for automated Route53
+# work.
+#
+# NOTE: This is a very basic script that is only designed to create a standard
+#       set of Route53 cross account roles and policies.  It is not designed to
+#       update existing roles or policies.
+#
+#       In particular this script will not change any policy if the policy
+#       already exists.  If you want to change a policy then delete the
+#       existing policy through the AWS console and let this script create a
+#       clean version of the policy.
+#
+#       Before you delete the allow-assume-ec2-route53-full-role policy, read
+#       the WARNING below.
+
+# For cross account route53 access we need:
+#
+# Account whispir:
+#
+# * A cross account role allowing the central account to assume full Route53
+#   authority.  This is called ec2-route53-full-role.  The 'ec2' part is to
+#   make it obvious that this role is intended for automated scripts running on
+#   an EC2 instance.
+#
+# Central account (whispir-users):
+#
+# * A cross account role allowing the central account to assume full Route53
+#   authority.  Not strictly cross account but the role needs to be defined on
+#   all accounts that the Route53 scripts will run against and the central
+#   account has Route53 data.
+#
+# * A policy to allow an entity to assume ec2-route53-full-role on the accounts
+#   that have Route53 data.
+#
+# * The scripts that create the NAT instances on the central account will also
+#   create a role (ec2-nat-Role-XXX) and assign that role to the NAT instances.
+#   ec2-nat-Role includes the allow-assume-ec2-route53-full-role policy which
+#   allows the NAT instances in the central account to assume
+#   ec2-route53-full-role authority against all accounts that have Route53
+#   data.  Is your brain hurting yet?
+
+# WARNING WARNING WARNING:
+#
+# Deleting the allow-assume-ec2-route53-full-role policy will break any
+# instances that the policy is attached to.
+#
+# When you delete a policy through the console, that policy is detached from
+# all entities, including the ec2-nat-Role in the central account.  Recreating
+# the policy does not automatically attach it to any instances; attaching a
+# policy to an instance is done through the cloud formation scripts that create
+# the instances.
+#
+# Even rerunning the CF script for the NAT instances will not fix the problem
+# because, as far as CF is concerned, the CF template is up to date.  Another
+# example of the fact that CF cannot detect "manual" changes outside CF.
+# Either manually attach the recreated policy to the ec2-nat-Role on the
+# central account or delete all the nat-instance clouds from the central
+# account and run CF to recreate them.  Now my brain is hurting!
+#
+# Why have a script with so many restrictions when it is only run once?  Mainly
+# to document the "maze of twisty little passages, all alike" that is AWS cross
+# account roles and policies.
+
+set -e
+set -o pipefail
+
+source ./functions
+
+aws_policies="AmazonRoute53FullAccess AmazonSNSReadOnlyAccess"
+
+aws_policy_arns="$(echo $aws_policies | sed -e 's/\([^ ]\+\)/arn:aws:iam::aws:policy\/\1/g')"
+
+# Set up on account whispir
+
+(
+	set -e
+	set -o pipefail
+	source ./sts-assume-admin whispir
+	./create-cross-account-role ec2-route53-full-role "$aws_policy_arns" false
+)
+
+# Set up on the central account
+
+(
+	set -e
+	set -o pipefail
+	source ./sts-assume-admin ${CENTRAL_ACCOUNT:?}
+	./create-cross-account-role ec2-route53-full-role "$aws_policy_arns" false
+
+	resources=''
+	for a in whispir ${CENTRAL_ACCOUNT:?}
+	do
+		resources="$resources arn:aws:iam::$(./map-account-number $a):role/ec2-route53-full-role"
+	done
+	resources="$(bash_list_to_json "$resources")"
+
+	policy=$(cat << EODATA
+{
+  "Version": "2012-10-17",
+  "Statement": {
+    "Effect": "Allow",
+    "Action": "sts:AssumeRole",
+    "Resource": [ $resources ]
+  }
+}
+EODATA
+)
+
+	account=${CENTRAL_ACCOUNT:?} ./create-policy allow-assume-ec2-route53-full-role "Allow an entity to assume the ec2-route53-full role" "$policy"
+)

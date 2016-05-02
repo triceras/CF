@@ -1,0 +1,79 @@
+#!/bin/sh
+#
+# boot_signal_listen Listen for boot_signal messages
+#
+# chkconfig: 2345 09 91
+# description: Listen for boot_signal messages
+#
+### BEGIN INIT INFO
+# Provides: boot_signal_listen
+# Required-Start:
+# Required-Stop:
+# Default-Start: 2 3 4 5
+# Default-Stop: 0 1 6
+# Short-Description: Listen for boot_signal messages
+# Description: Listen for boot_signal messages.  When one arrives, run
+#              build.named.  See
+#              http://intra:8080/display/Whispir/AWS+Internal+Host+Names%2C+Domains+and+DNS+Details.
+### END INIT INFO
+
+# Source function library.
+. /etc/init.d/functions
+
+boot_signal_listen=boot_signal_listen
+
+running_pid() {
+  lsof -F p -i:42 | sed -ne '/^p/{s/p//;p;q;}'
+}
+
+status() {
+  pid=$(running_pid)
+  if [[ -n "$pid" ]]
+  then
+    echo "${boot_signal_listen} (pid $pid) is running"
+    return 0
+  else
+    echo "${boot_signal_listen} is stopped"
+    return 1
+  fi
+}
+
+start() {
+  echo -n "${boot_signal_listen}: Starting: "
+  umask 0077	# files only accessible by root
+  (
+    nc -lk 0.0.0.0 42 |
+      while read line
+      do
+        mkdir -p /tmp/${boot_signal_listen}-$$
+        cd /tmp/${boot_signal_listen}-$$
+        build.named
+        cd /root
+        rm -rf /tmp/${boot_signal_listen}-$$
+        sleep 5         # crude rate limiting
+      done &
+  ) < /dev/null > /dev/null 2>&1
+  success; echo
+}
+
+stop() {
+  echo -n "${boot_signal_listen}: Stopping: "
+  pid=$(running_pid)
+  [[ -z "$pid" ]] || kill $pid
+  success; echo
+}
+
+restart() {
+  stop
+  start
+}
+
+case "$1" in
+  status) status; RETVAL=$?; ;;
+  start) start; RETVAL=$?; ;;
+  stop) stop; RETVAL=$?; ;;
+  restart) restart; RETVAL=$?; ;;
+  *) echo "Usage: ${boot_signal_listen} {status|start|stop|restart}"; RETVAL=2; ;;
+esac
+
+exit $RETVAL

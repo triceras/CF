@@ -1,0 +1,172 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  "Description" : "Define the common util data in a VPC",
+  "Resources" : {
+    "UtilSecurityGroup" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "Util Security Group",
+        "VpcId" : "vpc-5cd7b939",
+        "Tags" : [
+          { "Key" : "Name", "Value" : "UtilSecurityGroup" }
+        ]
+      }
+    },
+    "ipingresstcpUtilSecurityGroup530A0000000853" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "53",
+        "ToPort" : "53",
+        "CidrIp" : "10.0.0.0/8",
+        "GroupId" : { "Fn::GetAtt": [ "UtilSecurityGroup", "GroupId" ] }
+      }
+    },
+    "ipingressudpUtilSecurityGroup530A0000000853" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "udp",
+        "FromPort" : "53",
+        "ToPort" : "53",
+        "CidrIp" : "10.0.0.0/8",
+        "GroupId" : { "Fn::GetAtt": [ "UtilSecurityGroup", "GroupId" ] }
+      }
+    },
+    "ipingresstcpUtilSecurityGroup53AC1000000C53" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "53",
+        "ToPort" : "53",
+        "CidrIp" : "172.16.0.0/12",
+        "GroupId" : { "Fn::GetAtt": [ "UtilSecurityGroup", "GroupId" ] }
+      }
+    },
+    "ipingressudpUtilSecurityGroup53AC1000000C53" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "udp",
+        "FromPort" : "53",
+        "ToPort" : "53",
+        "CidrIp" : "172.16.0.0/12",
+        "GroupId" : { "Fn::GetAtt": [ "UtilSecurityGroup", "GroupId" ] }
+      }
+    },
+    "ipingresstcpUtilSecurityGroup53C0A800001053" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "53",
+        "ToPort" : "53",
+        "CidrIp" : "192.168.0.0/16",
+        "GroupId" : { "Fn::GetAtt": [ "UtilSecurityGroup", "GroupId" ] }
+      }
+    },
+    "ipingressudpUtilSecurityGroup53C0A800001053" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "udp",
+        "FromPort" : "53",
+        "ToPort" : "53",
+        "CidrIp" : "192.168.0.0/16",
+        "GroupId" : { "Fn::GetAtt": [ "UtilSecurityGroup", "GroupId" ] }
+      }
+    },
+    "ipingresstcpUtilSecurityGroup420A2400001042" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "42",
+        "ToPort" : "42",
+        "CidrIp" : "10.36.0.0/16",
+        "GroupId" : { "Fn::GetAtt": [ "UtilSecurityGroup", "GroupId" ] }
+      }
+    },
+    "sgingresstcpUtilSecurityGroup22sgf9b1ba9c22" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "22",
+        "ToPort" : "22",
+        "SourceSecurityGroupId" : "sg-f9b1ba9c",
+        "GroupId" : { "Fn::GetAtt": [ "UtilSecurityGroup", "GroupId" ] }
+      }
+    },
+    "ipingresstcpUtilSecurityGroup327680A2400001032768" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "32768",
+        "ToPort" : "61000",
+        "CidrIp" : "10.36.0.0/16",
+        "GroupId" : { "Fn::GetAtt": [ "UtilSecurityGroup", "GroupId" ] }
+      }
+    },
+    "sgingresstcpUtilSecurityGroup32768UtilSecurityGroup32768" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "32768",
+        "ToPort" : "61000",
+        "SourceSecurityGroupId" : { "Fn::GetAtt": [ "UtilSecurityGroup", "GroupId" ] },
+        "GroupId" : { "Fn::GetAtt": [ "UtilSecurityGroup", "GroupId" ] }
+      }
+    },
+    "ipingresstcpUtilSecurityGroup220A2400001022" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "22",
+        "ToPort" : "22",
+        "CidrIp" : "10.36.0.0/16",
+        "GroupId" : { "Fn::GetAtt": [ "UtilSecurityGroup", "GroupId" ] }
+      }
+    },
+    "ipingresstcpUtilSecurityGroup250A2400001025" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "tcp",
+        "FromPort" : "25",
+        "ToPort" : "25",
+        "CidrIp" : "10.36.0.0/16",
+        "GroupId" : { "Fn::GetAtt": [ "UtilSecurityGroup", "GroupId" ] }
+      }
+    },
+    "sgingressudpUtilSecurityGroup32768UtilSecurityGroup32768" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "udp",
+        "FromPort" : "32768",
+        "ToPort" : "61000",
+        "SourceSecurityGroupId" : { "Fn::GetAtt": [ "UtilSecurityGroup", "GroupId" ] },
+        "GroupId" : { "Fn::GetAtt": [ "UtilSecurityGroup", "GroupId" ] }
+      }
+    },
+    "ipingress4UtilSecurityGroup0A00000008" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "4",
+        "FromPort" : "",
+        "ToPort" : "",
+        "CidrIp" : "10.0.0.0/8",
+        "GroupId" : { "Fn::GetAtt": [ "UtilSecurityGroup", "GroupId" ] }
+      }
+    },
+    "ipingress47UtilSecurityGroup0A00000008" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "IpProtocol" : "47",
+        "FromPort" : "",
+        "ToPort" : "",
+        "CidrIp" : "10.0.0.0/8",
+        "GroupId" : { "Fn::GetAtt": [ "UtilSecurityGroup", "GroupId" ] }
+      }
+    }
+  },
+  "Outputs" : {
+    "UtilSecurityGroup" : {
+      "Description" : "Util Security Group",
+      "Value" : { "Ref" : "UtilSecurityGroup" }
+    }
+  }
+}

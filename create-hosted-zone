@@ -1,0 +1,133 @@
+#!/bin/bash
+
+# Create or update a public hosted zone in Route 53.
+#
+# Parameters are:
+#   Stack name prefix.
+#   Name of a file containing the record sets to define.
+#
+# The zone name is taken from the base filename.
+#
+# Each record is a white space delimited list of resource name, resource type,
+# value.  If there are more than 3 fields then fields 3 onwards form the value.
+# The entire value must be quoted.  You can even have a list of values, each
+# value is quoted, separated by comma.
+#
+# Resource names do not include the domain name, that is added automatically.
+#
+# Resource values must include the domain name if required.
+#
+# All new hosted zones are owned by our central account.
+#
+# For convenience, the stack is owned by region ap-southeast-2, even though
+# Route 53 entries are global.
+#
+# This creates two stacks, both of which start with the stack name prefix.
+#
+# <prefix>-hosted-zone.		Just creates the hosted zone.
+# <prefix>-resource-records.	Adds the resource records to the hosted zone.
+#
+# There are two stacks to make it easier to delete all the resource records
+# without deleting the zone.  Deleting and redefining the entire zone means
+# that name server delegation has to be redone which is messy.  Especially
+# since we have to update the office DNS as well as Route 53.
+
+set -e
+set -o pipefail
+
+stack_name_prefix=${1:?"Missing stack name prefix"}
+zone_file_name=${2:?"Missing filename to populate hosted zone"}
+shift 2
+
+region=${REGION:-'ap-southeast-2'}
+source ./functions
+
+account=${CENTRAL_ACCOUNT:?}
+source sts-assume-admin $account
+zone_name=${zone_file_name##*/}
+
+if [[ ! -s "$zone_file_name" ]]
+then
+        echo "Zone file name '$zone_file_name' does not exist or is empty"
+        exit 1
+fi
+
+# First define the hosted zone.
+
+json_fragment << EODATA
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  "Description" : "Define a hosted zone",
+  "Resources" : {
+    "ZoneName" : {
+      "Type" : "AWS::Route53::HostedZone",
+      "Properties" : {
+        "Name" : "$zone_name"
+      }
+    }
+  }
+}
+EODATA
+
+(
+	stack_name=${stack_name_prefix}-hosted-zone
+	build_stack
+)
+
+# Now add the resource records.
+
+: > "$JSON_FILE"
+
+json_fragment << 'EODATA'
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  "Description" : "Add resource records to a hosted zone",
+  "Resources" : {
+
+EODATA
+
+while read resource_name resource_type value
+do
+	# Need a clean name for the label.  Convert '@' to zone name.  Strip
+	# '.', '-', '_' from resource names.  Convert '*' to 'star'.  Convert
+	# to lower case.  Append the resource type to make a unique name.
+
+	if [[ "$resource_name" == '@' ]]
+	then
+		resource_name=$zone_name.
+		clean_name=$zone_name
+	else
+		resource_name=$resource_name.$zone_name.
+		clean_name="$resource_name"
+	fi
+	clean_name=$clean_name$resource_type
+        clean_name=${clean_name//./}
+        clean_name=${clean_name//-/}
+        clean_name=${clean_name//_/}
+        clean_name=${clean_name//\*/star}
+        clean_name=${clean_name,,}
+
+        json_fragment << EODATA
+    "$clean_name" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "HostedZoneName" : "$zone_name.",
+        "Name" : "$resource_name",
+        "Type" : "$resource_type",
+        "ResourceRecords" : [ $value ],
+	"TTL" : 60
+      }
+    },
+
+EODATA
+done < "$zone_file_name"
+
+json_fragment << 'EODATA'
+  }
+}
+EODATA
+
+(
+	stack_name=${stack_name_prefix}-resource-records
+	build_stack
+)
